@@ -93,22 +93,38 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
 
 
 async def book_appointment(
-    params: FunctionCallParams, name: str, phone: str, day: str, time: str
+    params: FunctionCallParams, name: str, phone: str, day: str, time: str, location: str
 ) -> None:
-    """Book a free consultation appointment at the driving school.
+    """Book a free consultation appointment at one branch of the driving school.
 
-    Only call this after the caller has confirmed a specific day and time, and
-    after you have read their phone number back to them. Never invent a slot --
-    use check_available_appointments first.
+    Only call this after the caller has confirmed a specific day, time and
+    branch, and after you have read their phone number back to them. Never
+    invent a slot -- use check_available_appointments first.
 
     Args:
         name: The caller's full name as they said it.
         phone: The caller's phone number, digits only, with country code if given.
         day: The agreed day, for example "Dienstag", "morgen" or "2026-10-15".
         time: The agreed time in 24 hour format, for example "16:00".
+        location: Which branch the caller wants: Barmbek, Billstedt, Harburg or
+            Langenhorn. Ask the caller if they have not said.
     """
     session: CallSession = params.app_resources
     iso_date = store.parse_spoken_date(day)
+
+    branch = next(
+        (name for name in config.LOCATIONS if name.lower() == (location or "").strip().lower()),
+        None,
+    )
+    if branch is None:
+        await params.result_callback(
+            {
+                "booked": False,
+                "locations": list(config.LOCATIONS),
+                "say": "Frage, in welcher Filiale der Termin sein soll, und nenne die vier Standorte.",
+            }
+        )
+        return
 
     if iso_date is None:
         await params.result_callback(
@@ -137,6 +153,7 @@ async def book_appointment(
         phone=phone or session.caller_id or "",
         slot_date=iso_date,
         slot_time=normalised,
+        location=branch,
         topic="Beratungsgespraech",
     )
     if booking_id is None:
@@ -145,7 +162,7 @@ async def book_appointment(
         )
         return
 
-    session.note(f"Termin gebucht: {name}, {iso_date} {normalised}")
+    session.note(f"Termin gebucht: {name}, {iso_date} {normalised}, Filiale {branch}")
     await notify.notify_booking(
         name=name,
         phone=phone or session.caller_id or "",
@@ -153,15 +170,20 @@ async def book_appointment(
         slot_time=normalised,
         topic="Beratungsgespraech",
     )
+
+    address = config.location_address(branch)
+    where = f"in der Filiale {branch}" + (f", {address}" if address else "")
     await params.result_callback(
         {
             "booked": True,
             "date": iso_date,
             "time": normalised,
+            "location": branch,
             "say": (
                 f"Bestaetige den Termin in einem Satz: {name}, {iso_date} um "
-                f"{config.speak_time(normalised)}, {config.BUSINESS['address']}. "
-                "Frage dann, ob du sonst noch helfen kannst."
+                f"{config.speak_time(normalised)}, {where}. "
+                + ("" if address else "Die genaue Adresse schickt ein Kollege per SMS nach. ")
+                + "Frage dann, ob du sonst noch helfen kannst."
             ),
         }
     )

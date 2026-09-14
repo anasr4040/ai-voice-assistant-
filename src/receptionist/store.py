@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     phone       TEXT NOT NULL,
     slot_date   TEXT NOT NULL,
     slot_time   TEXT NOT NULL,
+    location    TEXT,
     topic       TEXT,
     UNIQUE (slot_date, slot_time)
 );
@@ -76,6 +77,10 @@ def init() -> None:
     """Create tables if they do not exist yet. Safe to call on every boot."""
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Databases created before Infinity's four branches were known lack this.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
+        if "location" not in columns:
+            conn.execute("ALTER TABLE bookings ADD COLUMN location TEXT")
 
 
 # --- Writes ---------------------------------------------------------------

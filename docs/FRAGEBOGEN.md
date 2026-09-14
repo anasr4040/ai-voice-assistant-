@@ -1,67 +1,121 @@
 # Fragebogen für Fahrschule Infinity
 
-Diese Angaben braucht die Telefonassistenz, damit sie am Telefon nichts
-Falsches sagt. Alles, was hier nicht ausgefüllt ist, sagt die Assistenz auch
-nicht — sie bietet stattdessen einen Rückruf an. Das ist gewollt.
+**Vorausgefüllt aus öffentlich zugänglichen Quellen — bitte prüfen und korrigieren.**
 
-Antworten eintragen und zurückschicken, dann wird alles in
-`src/receptionist/config.py` übertragen.
+Die offizielle Webseite war von unserem System aus nicht abrufbar, deshalb
+stammen alle Angaben unten aus Branchenverzeichnissen und aus den eigenen
+Social-Media-Beiträgen der Fahrschule. Das heißt: sie können veraltet oder
+schlicht falsch sein.
+
+| Markierung | Bedeutung |
+|---|---|
+| ✅ | Aus mehreren Quellen übereinstimmend. Bitte nur kurz bestätigen. |
+| ⚠️ | Nur eine Quelle, oder die Quellen widersprechen sich. Bitte korrigieren. |
+| ❓ | Nicht gefunden. Bitte ausfüllen. |
+
+Alles, was hier nicht bestätigt ist, sagt die Telefonassistenz auch nicht —
+sie bietet stattdessen einen Rückruf an. Das ist bewusst so gebaut.
 
 ---
 
 ## 1. Fahrschule
 
-| Frage | Antwort |
-|---|---|
-| Vollständige Adresse | |
-| Telefonnummer fürs Büro | +49 40 64421700 |
-| E-Mail-Adresse | |
-| Webseite | |
+| | Frage | Vorausgefüllt | Korrektur |
+|---|---|---|---|
+| ✅ | Firmenname | Fahrschule Infinity GmbH | |
+| ✅ | Zentrale Telefonnummer | 040 64421700 | |
+| ✅ | E-Mail | info@fahrschule-infinity.de | |
+| ✅ | Webseite | fahrschule-infinity.de | |
 
-## 2. Öffnungszeiten des Büros
+## 2. Standorte
 
-| Tag | Von | Bis |
-|---|---|---|
-| Montag | | |
-| Dienstag | | |
-| Mittwoch | | |
-| Donnerstag | | |
-| Freitag | | |
-| Samstag | | |
+Alle vier Filialen teilen sich offenbar **eine** Telefonnummer. Die Assistenz
+fragt deshalb früh im Gespräch nach, um welche Filiale es geht.
 
-## 3. Theorieunterricht
+| | Filiale | Adresse | Korrektur |
+|---|---|---|---|
+| ✅ | Barmbek | Bramfelder Straße 95, 22305 Hamburg | |
+| ✅ | Harburg | Hannoversche Straße 86, 21079 Hamburg (UG Phoenix-Center) | |
+| ❓ | Billstedt | **fehlt** | |
+| ❓ | Langenhorn | **fehlt** | |
+
+Stimmt die Zahl von vier Standorten noch? ______________________
+
+Gibt es je Filiale eine eigene Durchwahl? ______________________
+
+## 3. Öffnungszeiten des Büros
+
+| | Tag | Vorausgefüllt | Korrektur |
+|---|---|---|---|
+| ✅ | Montag – Freitag | 13:00 – 19:00 Uhr | |
+| ✅ | Samstag | geschlossen | |
+| ✅ | Sonntag | geschlossen | |
+
+Gelten diese Zeiten für **alle** Filialen? ______________________
+
+## 4. Theorieunterricht
+
+❓ Hierzu war online nichts Belastbares zu finden. In Verzeichnissen standen
+nur die Bürozeiten von oben — die haben wir bewusst **nicht** als
+Unterrichtszeiten übernommen.
 
 | Frage | Antwort |
 |---|---|
 | An welchen Tagen und Uhrzeiten? | |
-| Kann man jederzeit einsteigen, oder nur zum Kursstart? | |
+| Je Filiale unterschiedlich? | |
+| Einstieg jederzeit möglich, oder nur zum Kursstart? | |
 
-## 4. Führerscheinklassen
+## 5. Führerscheinklassen
 
-Welche Klassen bildet Infinity aus? Nicht Zutreffendes streichen.
+⚠️ Erwähnt wurden B und BF17, sowie A, A1, A2 und AM „an einem der Standorte“.
+Welche Filiale welche Klassen anbietet, war nicht ersichtlich.
 
-`B` · `B197 (Automatik)` · `BF17 (ab 17)` · `BE` · `B96` · `AM` · `A1` · `A2` · `A`
+Bitte ankreuzen, und dahinter die Filialen notieren, falls es Unterschiede gibt:
 
-Weitere: ______________________
+| Klasse | Angeboten? | Nur in welchen Filialen? |
+|---|---|---|
+| B | | |
+| B197 (Automatik) | | |
+| BF17 (ab 17) | | |
+| BE | | |
+| B96 | | |
+| AM (Roller) | | |
+| A1 | | |
+| A2 | | |
+| A | | |
 
-## 5. Preise
+## 6. Preise — der wichtigste Punkt
 
-**Der wichtigste Punkt.** Solange hier nichts steht, nennt die Assistenz
-überhaupt keine Preise und bietet nur einen Rückruf an.
+⚠️ **Hier widersprechen sich die Quellen, deshalb nennt die Assistenz derzeit
+gar keinen Preis.** Gefunden wurde:
 
-| Position | Preis |
-|---|---|
-| Grundbetrag (Theorie) | |
-| Fahrstunde (45 Min) | |
-| Sonderfahrt (Überland / Autobahn / Nacht) | |
-| Vorstellungsentgelt praktische Prüfung | |
-| Vorstellungsentgelt Theorieprüfung | |
-| Unterschiedliche Preise je Klasse? | |
+- Anmeldegebühr **395 €** statt 595 € (Branchenverzeichnis)
+- Anmeldegebühr **295 €** statt 595 € (eigener Beitrag zur Eröffnung Langenhorn)
+- Fahrstunde **65,00 €**
 
-## 6. Anmeldung
+Das sieht nach wechselnden Aktionen aus, die sich je Filiale und Monat
+unterscheiden. Eine Assistenz, die am Telefon das Angebot vom letzten Quartal
+nennt, kostet mehr Vertrauen, als sie einbringt. Solange dieser Abschnitt nicht
+bestätigt ist, sagt sie sinngemäß: *„Die Preise hängen von der Filiale und vom
+aktuellen Angebot ab, ein Kollege nennt sie Ihnen verbindlich"* — und nimmt
+einen Rückruf auf.
 
-Was muss ein neuer Fahrschüler mitbringen? Standard ist unten vorausgefüllt —
-bitte ergänzen oder streichen.
+| Position | Preis | Je Filiale unterschiedlich? |
+|---|---|---|
+| Grundbetrag / Anmeldegebühr | | |
+| Fahrstunde (45 Min) | | |
+| Sonderfahrt (Überland / Autobahn / Nacht) | | |
+| Vorstellungsentgelt praktische Prüfung | | |
+| Vorstellungsentgelt Theorieprüfung | | |
+| Unterschiede je Klasse? | | |
+
+**Soll die Assistenz Aktionspreise überhaupt nennen dürfen?** Wenn ja, wer sagt
+uns Bescheid, wenn eine Aktion endet? ______________________
+
+## 7. Anmeldung
+
+Was muss ein neuer Fahrschüler mitbringen? Standard vorausgefüllt — bitte
+ergänzen oder streichen.
 
 - Sehtest
 - Erste-Hilfe-Kurs (9 Unterrichtseinheiten)
@@ -71,19 +125,20 @@ bitte ergänzen oder streichen.
 
 Weitere: ______________________
 
-## 7. Beratungstermine
+## 8. Beratungstermine
 
-Die Assistenz darf selbstständig Termine für ein **kostenloses
-Beratungsgespräch** vergeben. Einzelne Fahrstunden bucht sie bewusst nicht,
-die hängen vom Fahrlehrer ab.
+Die Assistenz vergibt selbstständig Termine für ein **kostenloses
+Beratungsgespräch**. Einzelne Fahrstunden bucht sie bewusst nicht — die hängen
+vom Fahrlehrer ab.
 
-| Frage | Antwort |
-|---|---|
-| An welchen Tagen und Uhrzeiten sind Beratungstermine möglich? | |
-| Wie lange dauert so ein Termin? | 30 Minuten |
-| Wie viele Tage im Voraus darf gebucht werden? | 14 Tage |
+| Frage | Vorschlag | Korrektur |
+|---|---|---|
+| An welchen Tagen und Uhrzeiten? | Mo–Fr 16:00, 17:00, 18:00 | |
+| Dauer | 30 Minuten | |
+| Wie weit im Voraus buchbar? | 14 Tage | |
+| In allen vier Filialen? | ja | |
 
-## 8. Wobei soll die Assistenz **nicht** selbst antworten?
+## 9. Wobei soll die Assistenz **nicht** selbst antworten?
 
 Bei diesen Themen nimmt sie nur einen Rückruf auf. Vorschlag — bitte ergänzen:
 
@@ -95,16 +150,16 @@ Bei diesen Themen nimmt sie nur einen Rückruf auf. Vorschlag — bitte ergänze
 
 Weitere: ______________________
 
-## 9. Auftreten
+## 10. Auftreten
 
-| Frage | Antwort |
-|---|---|
-| Name der Assistenz | Mia |
-| Weibliche oder männliche Stimme? | weiblich |
-| "Sie" oder "du"? | Sie |
-| Soll sie sagen, dass sie eine KI ist? | noch nicht |
+| Frage | Vorschlag | Korrektur |
+|---|---|---|
+| Name der Assistenz | Mia | |
+| Stimme | weiblich | |
+| Anrede | „Sie" | |
+| Soll sie sagen, dass sie eine KI ist? | noch nicht | |
 
-## 10. Häufigste Fragen am Telefon
+## 11. Häufigste Fragen am Telefon
 
 Welche drei bis fünf Fragen kommen am häufigsten? Die werden zuerst richtig
 beantwortet.

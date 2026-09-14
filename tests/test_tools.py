@@ -84,8 +84,14 @@ async def main() -> int:
         phone="+4917612345678",
         day=first["date"],
         time=first["time"],
+        location="Barmbek",
     )
     check("booking accepted", params.result.get("booked") is True, str(params.result.get("date")))
+    check("branch recorded", params.result.get("location") == "Barmbek")
+    check(
+        "confirmation names the branch address",
+        "Bramfelder" in params.result.get("say", ""),
+    )
     check("row written", any(b["name"] == "Anna Schmidt" for b in store.recent_bookings()))
 
     print("\n4. Someone else tries the same slot")
@@ -96,6 +102,7 @@ async def main() -> int:
         phone="+49170000",
         day=first["date"],
         time=first["time"],
+        location="Barmbek",
     )
     check("double booking refused", params.result.get("booked") is False)
     check("alternatives offered", bool(params.result.get("alternatives")))
@@ -108,8 +115,38 @@ async def main() -> int:
         phone="+49170111",
         day=first["date"],
         time="03:00",
+        location="Barmbek",
     )
     check("refuses unoffered slot", params.result.get("booked") is False)
+
+    print("\n5b. Caller names a branch that does not exist")
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Emil Braun",
+        phone="+49170222",
+        day=first["date"],
+        time=first["time"],
+        location="Altona",
+    )
+    check("refuses unknown branch", params.result.get("booked") is False)
+    check("offers the four real branches", len(params.result.get("locations", [])) == 4)
+
+    print("\n5c. Branch with no street on file is still bookable")
+    free = store.free_slots()[0]
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Fatima Yilmaz",
+        phone="+49170333",
+        day=free["date"],
+        time=free["time"],
+        location="Billstedt",
+    )
+    say = params.result.get("say", "")
+    check("books without a known street", params.result.get("booked") is True)
+    check("never invents a street", "strasse" not in say.lower().replace("hannoversche", ""))
+    check("promises the address follows", "SMS" in say)
 
     print("\n6. Caller wants a callback")
     params = FakeParams(session)
@@ -144,14 +181,14 @@ async def main() -> int:
         "set TRANSFER_NUMBER in .env, or transfers fall back to callbacks",
     )
     todo(
-        "real address configured",
-        "Musterstrasse" not in config.BUSINESS["address"],
-        "config.py still has the placeholder address",
+        "all branch addresses known",
+        all(entry["address"] for entry in config.LOCATIONS.values()),
+        "missing: " + ", ".join(n for n, e in config.LOCATIONS.items() if not e["address"]),
     )
     todo(
-        "real prices configured",
-        "420 Euro" not in config.PRICES["grundbetrag"],
-        "config.py still has placeholder prices -- the bot will quote invented numbers",
+        "prices confirmed by owner",
+        config.PRICES_CONFIRMED,
+        "PRICES_CONFIRMED is False -- the bot refuses to quote any price",
     )
 
     print(f"\n{'=' * 58}")

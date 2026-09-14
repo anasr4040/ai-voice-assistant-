@@ -25,14 +25,58 @@ TIMEZONE = ZoneInfo("Europe/Berlin")
 
 BUSINESS = {
     "name": "Fahrschule Infinity",
+    "legal_name": "Fahrschule Infinity GmbH",
     "city": "Hamburg",
-    # TODO(owner): real street address
-    "address": "Musterstrasse 1, 20095 Hamburg",
+    # Central line for all branches. Confirmed: matches the number given by the
+    # owner and two public directory listings.
     "phone": "+49 40 64421700",
     "email": "info@fahrschule-infinity.de",
+    "website": "https://fahrschule-infinity.de",
     # The Hamburg licensing authority. Correct for Hamburg, keep as-is.
     "authority": "Landesbetrieb Verkehr (LBV)",
 }
+
+# Infinity runs four branches that all share the one phone number above, so the
+# first thing to establish on most calls is WHICH branch the caller means.
+# Sources: public directory listings and the school's own social posts. Two
+# addresses are still unknown -- the bot says the branch name and offers a
+# callback rather than guessing a street.
+LOCATIONS = {
+    "Barmbek": {
+        "address": "Bramfelder Strasse 95, 22305 Hamburg",
+        "note": "",
+    },
+    "Harburg": {
+        "address": "Hannoversche Strasse 86, 21079 Hamburg",
+        "note": "im Untergeschoss des Phoenix-Centers",
+    },
+    # TODO(owner): street address missing. Until it is filled in, the bot names
+    # the branch but never invents a street.
+    "Billstedt": {"address": "", "note": ""},
+    "Langenhorn": {"address": "", "note": ""},
+}
+
+# Branch the caller reaches if they do not say which one they mean.
+DEFAULT_LOCATION = "Barmbek"
+
+
+def location_address(name: str) -> str:
+    """Speakable address for a branch, or an empty string if not yet known."""
+    entry = LOCATIONS.get(name) or {}
+    address, note = entry.get("address", ""), entry.get("note", "")
+    if not address:
+        return ""
+    return f"{address} ({note})" if note else address
+
+
+def locations_sentence() -> str:
+    """All branches as one speakable sentence, addresses only where known."""
+    parts = []
+    for name in LOCATIONS:
+        address = location_address(name)
+        parts.append(f"{name}, {address}" if address else name)
+    return "; ".join(parts)
+
 
 # The AI's own persona. "Sie" is the safe default for a German business.
 ASSISTANT_NAME = "Mia"
@@ -43,11 +87,11 @@ FORM_OF_ADDRESS = "Sie"  # "Sie" (formal) or "du" (informal)
 # whether a "call you back" promise is realistic today.
 
 OPENING_HOURS = {
-    "Montag": ("15:00", "19:00"),
-    "Dienstag": ("15:00", "19:00"),
-    "Mittwoch": ("15:00", "19:00"),
-    "Donnerstag": ("15:00", "19:00"),
-    "Freitag": ("15:00", "18:00"),
+    "Montag": ("13:00", "19:00"),
+    "Dienstag": ("13:00", "19:00"),
+    "Mittwoch": ("13:00", "19:00"),
+    "Donnerstag": ("13:00", "19:00"),
+    "Freitag": ("13:00", "19:00"),
     "Samstag": None,
     "Sonntag": None,
 }
@@ -89,12 +133,25 @@ LICENCE_CLASSES = {
 # TODO(owner): every one of these is a guess. Replace before the demo.
 # Written the way they should be SPOKEN, not the way they are printed.
 
+# Set to True ONLY once the owner has confirmed every figure below.
+# While it is False the bot states no price at all and offers a callback.
+#
+# Why this is not simply filled in from the website: public sources disagree.
+# One listing gives an Anmeldegebuehr of 395 Euro "statt 595", the school's own
+# social post gives 295 Euro "statt 595" for the Langenhorn opening. Those are
+# rotating promotions that differ by branch and by month. A receptionist that
+# quotes last quarter's offer costs more trust than one that says "das sagt
+# Ihnen ein Kollege genau".
+PRICES_CONFIRMED = False
+
+# Found publicly, NOT confirmed. Correct these, then flip the flag above.
+# Written the way they should be SPOKEN, not the way they are printed.
 PRICES = {
-    "grundbetrag": "420 Euro Grundbetrag, darin ist der komplette Theorieunterricht enthalten",
-    "fahrstunde": "65 Euro pro Fahrstunde zu 45 Minuten",
-    "sonderfahrt": "78 Euro pro Sonderfahrt, also Ueberland, Autobahn und Nachtfahrt",
-    "vorstellung_praktisch": "290 Euro Vorstellungsentgelt fuer die praktische Pruefung",
-    "vorstellung_theorie": "120 Euro Vorstellungsentgelt fuer die Theoriepruefung",
+    "grundbetrag": "",  # web: 395 Euro Anmeldegebuehr, statt 595 (promotion, unconfirmed)
+    "fahrstunde": "",  # web: 65 Euro pro Fahrstunde (unconfirmed)
+    "sonderfahrt": "",  # unknown
+    "vorstellung_praktisch": "",  # unknown
+    "vorstellung_theorie": "",  # unknown
     "note": (
         "Dazu kommen die amtlichen Gebuehren von TUEV oder DEKRA und vom "
         f"{BUSINESS['authority']}, die zahlt man direkt dort. "

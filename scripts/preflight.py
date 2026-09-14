@@ -170,15 +170,16 @@ async def check_twilio(session: aiohttp.ClientSession) -> None:
 
 
 def check_config() -> None:
-    if "Musterstrasse" in config.BUSINESS["address"]:
-        report(WARN, "Business address", "still the placeholder in config.py")
+    unknown = [name for name in config.LOCATIONS if not config.LOCATIONS[name]["address"]]
+    if unknown:
+        report(WARN, "Branch addresses", f"street unknown for: {', '.join(unknown)}")
     else:
-        report(OK, "Business address", config.BUSINESS["address"])
+        report(OK, "Branch addresses", f"all {len(config.LOCATIONS)} branches have one")
 
-    if "420 Euro" in config.PRICES["grundbetrag"]:
-        report(WARN, "Prices", "still placeholders -- the bot will quote invented numbers")
+    if not config.PRICES_CONFIRMED:
+        report(WARN, "Prices", "not owner-confirmed -- the bot refuses to quote any price")
     else:
-        report(OK, "Prices", "customised")
+        report(OK, "Prices", "confirmed by the owner")
 
     report(
         OK if config.TRANSFER_NUMBER else WARN,

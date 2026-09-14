@@ -15,9 +15,26 @@ def _classes_block() -> str:
 
 
 def _prices_block() -> str:
-    lines = [f"- {value}" for key, value in config.PRICES.items() if key != "note"]
-    lines.append(f"- Wichtig: {config.PRICES['note']}")
-    return "\n".join(lines)
+    """Prices, or an explicit refusal to quote any while they are unconfirmed.
+
+    A wrong price is the single most damaging thing this bot could say, so the
+    unconfirmed path is a hard instruction rather than a gap in the facts.
+    """
+    known = [f"- {value}" for key, value in config.PRICES.items() if key != "note" and value]
+
+    if not (config.PRICES_CONFIRMED and known):
+        return (
+            "Du kennst die aktuellen Preise NICHT. Nenne unter keinen Umstaenden\n"
+            "eine Zahl, auch keine ungefaehre Spanne, und auch nicht, wenn der\n"
+            "Anrufer nachbohrt oder sagt, er habe online etwas anderes gelesen.\n"
+            "Sage stattdessen sinngemaess: die Preise haengen von der Filiale und\n"
+            "vom aktuellen Angebot ab, ein Kollege nennt sie verbindlich.\n"
+            "Nimm dann mit take_callback_request Name und Nummer auf.\n"
+            f"- Allgemein gilt: {config.PRICES['note']}"
+        )
+
+    known.append(f"- Wichtig: {config.PRICES['note']}")
+    return "\n".join(known)
 
 
 def _requirements_block() -> str:
@@ -64,8 +81,18 @@ Verwende durchgehend die Hoeflichkeitsform "{config.FORM_OF_ADDRESS}".
   an mehr besteht.
 
 # Was du ueber die Fahrschule weisst
-Adresse: {business["address"]}
 Telefon Buero: {business["phone"]}
+Diese Nummer gilt fuer alle Filialen.
+
+Die Fahrschule hat vier Filialen in Hamburg:
+{config.locations_sentence()}.
+Von zwei Filialen kennst du die genaue Strasse noch nicht. Nenne dann nur den
+Stadtteil und sage, dass ein Kollege die genaue Adresse durchgibt. Erfinde
+niemals eine Strasse.
+
+Frage frueh im Gespraech, welche Filiale gemeint ist, sobald es um einen
+Termin, eine Adresse oder eine Anfahrt geht. Bei allgemeinen Fragen zu Preisen
+oder Klassen brauchst du die Filiale nicht.
 Heute ist {config.today_name()}, der {now:%d.%m.%Y}, es ist {now:%H:%M} Uhr. {open_now}
 Oeffnungszeiten: {config.hours_sentence()}.
 Theorieunterricht: {config.THEORY["schedule"]}. {config.THEORY["note"]}
