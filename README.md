@@ -38,7 +38,7 @@ Fill in four keys — the file has signup links and explains each one:
 | | Provider | Why this one |
 |---|---|---|
 | Hears | **Deepgram** | `nova-3` + `multi` handles German/English code-switching mid-sentence. Free signup credit covers a demo many times over |
-| Thinks | **OpenAI** `gpt-4o-mini` | Cheap, and reliable at the tool calling the booking flow depends on. Under a cent per call |
+| Thinks | **Google** `gemini-2.5-flash` | Free tier at aistudio.google.com, no card needed. Swap to OpenAI `gpt-4o-mini` or Anthropic `claude-haiku-4-5` with one env var |
 | Speaks | **ElevenLabs** `eleven_flash_v2_5` | Best German of the affordable options. Switch to Cartesia (~half the price) once volume is real |
 | Phones | **Twilio** | Any voice number. A German `+49 40` number needs a regulatory bundle and days of approval — demo on any number, swap later |
 
@@ -133,11 +133,19 @@ docs/FRAGEBOGEN.md          fill-in sheet for the owner
 ## Testing without spending money
 
 ```sh
-uv run python tests/test_tools.py
+uv run python tests/test_tools.py            # every action the bot can take
+uv run python tests/test_prompt_delivery.py  # the prompt reaches the model
 ```
 
-Booking, double-booking, unoffered slots, lead capture and transfer fallback,
-against a temporary database. No STT, LLM or TTS calls.
+The first covers booking, double-booking, unoffered slots, unknown branches,
+lead capture and transfer fallback against a temporary database.
+
+The second guards a failure that is completely silent: passing the system
+prompt as a `"system"` message in `LLMContext` is deprecated since Pipecat 1.9
+and is **dropped without warning** by the Google and Anthropic adapters. The
+bot then answers fluently, in German, having never heard of the driving school,
+and nothing in the logs says why. The prompt is set on the LLM service instead;
+this test proves it arrives for all three providers.
 
 ## Rough running cost
 

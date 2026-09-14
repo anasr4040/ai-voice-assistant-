@@ -63,10 +63,15 @@ def build_stt():
     )
 
 
-def build_llm():
+def build_llm(system_instruction: str):
     """The brain. Cheap and fast beats clever here -- it is reading off a script.
 
     LLM_PROVIDER: openai (default) | google | anthropic
+
+    The system prompt goes on the service, not into LLMContext as a "system"
+    message. That form is deprecated since Pipecat 1.9 and, worse, the Google
+    and Anthropic adapters drop it silently -- you get a fluent assistant that
+    has never heard of Fahrschule Infinity, with nothing in the logs.
     """
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
@@ -77,6 +82,7 @@ def build_llm():
             api_key=os.getenv("GOOGLE_API_KEY", ""),
             settings=GoogleLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
+                system_instruction=system_instruction,
             ),
         )
 
@@ -87,6 +93,7 @@ def build_llm():
             api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             settings=AnthropicLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "claude-haiku-4-5"),
+                system_instruction=system_instruction,
             ),
         )
 
@@ -94,7 +101,10 @@ def build_llm():
 
     return OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY", ""),
-        settings=OpenAILLMService.Settings(model=os.getenv("LLM_MODEL", "gpt-4o-mini")),
+        settings=OpenAILLMService.Settings(
+            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            system_instruction=system_instruction,
+        ),
     )
 
 
@@ -141,12 +151,9 @@ def _save_transcript(context: LLMContext, session: CallSession) -> None:
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, session: CallSession):
     """Wire the pipeline and run one call to completion."""
-    stt, llm, tts = build_stt(), build_llm(), build_tts()
+    stt, llm, tts = build_stt(), build_llm(prompts.system_prompt()), build_tts()
 
-    context = LLMContext(
-        messages=[{"role": "system", "content": prompts.system_prompt()}],
-        tools=TOOLS,
-    )
+    context = LLMContext(tools=TOOLS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
