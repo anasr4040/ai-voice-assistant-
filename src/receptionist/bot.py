@@ -185,13 +185,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Caller connected (call_sid={session.call_sid}, from={session.caller_id})")
+        store.start_call(session.call_sid, session.caller_id)
         context.add_message({"role": "developer", "content": prompts.GREETING_INSTRUCTION})
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        outcome = "; ".join(session.captured) or "kein Ergebnis festgehalten"
-        logger.info(f"Call ended. Outcome: {outcome}")
+        outcome = "; ".join(session.captured)
+        logger.info(f"Call ended. Outcome: {outcome or 'no contact details captured'}")
+        store.end_call(session.call_sid, outcome)
         _save_transcript(context, session)
         await runner.cancel()
 

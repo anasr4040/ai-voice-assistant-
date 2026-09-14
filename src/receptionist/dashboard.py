@@ -43,6 +43,14 @@ th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(-
 tr:last-child td { border-bottom:none; }
 td.num { font-variant-numeric:tabular-nums; white-space:nowrap; }
 .empty { padding:20px 14px; color:var(--muted); font-size:14px; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px;
+         margin-bottom:8px; }
+.stat { background:var(--card); border:1px solid var(--line); border-radius:10px;
+        padding:14px 16px; }
+.stat .n { font-size:26px; font-weight:600; font-variant-numeric:tabular-nums;
+           line-height:1.2; }
+.stat .l { color:var(--muted); font-size:12px; margin-top:2px; }
+.note { color:var(--muted); font-size:13px; margin:10px 0 0; }
 .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px;
         background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent); }
 a { color:var(--accent); }
@@ -72,6 +80,7 @@ async def office(token: str = ""):
     store.init()
     bookings = store.recent_bookings()
     leads = store.recent_leads()
+    stats = store.call_stats()
 
     booking_rows = [
         [
@@ -102,6 +111,17 @@ async def office(token: str = ""):
   <h1>{escape(config.BUSINESS["name"])} &ndash; Telefonassistenz</h1>
   <div class="sub">{config.now():%d.%m.%Y, %H:%M} Uhr &middot;
     Buero <span class="pill">{status}</span></div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">{stats["total"]}</div>
+      <div class="l">Anrufe aufgefangen</div></div>
+    <div class="stat"><div class="n">{stats["captured"]}</div>
+      <div class="l">mit Kontaktdaten</div></div>
+    <div class="stat"><div class="n">{stats["rate"]}&thinsp;%</div>
+      <div class="l">Erfassungsquote</div></div>
+  </div>
+  <p class="note">Ohne die Telefonassistenz waeren das
+    {stats["total"]} unbeantwortete Anrufe gewesen.</p>
 
   <h2>Termine <span class="count">{len(bookings)}</span></h2>
   {_table(["Datum", "Uhrzeit", "Name", "Telefon"], booking_rows, "Noch keine Termine gebucht.")}

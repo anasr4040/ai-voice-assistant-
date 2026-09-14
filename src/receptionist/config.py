@@ -28,8 +28,7 @@ BUSINESS = {
     "city": "Hamburg",
     # TODO(owner): real street address
     "address": "Musterstrasse 1, 20095 Hamburg",
-    # TODO(owner): real callback number the office actually answers
-    "phone": "+49 40 000000",
+    "phone": "+49 40 64421700",
     "email": "info@fahrschule-infinity.de",
     # The Hamburg licensing authority. Correct for Hamburg, keep as-is.
     "authority": "Landesbetrieb Verkehr (LBV)",
@@ -134,10 +133,11 @@ BOOKABLE = {
 
 # --- Escalation -----------------------------------------------------------
 
-# TODO(owner): the number a caller gets transferred to when they ask for a
-# human. Leave empty and the bot takes a callback request instead, which is
-# the safer default for a demo.
-TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "")
+# The office line. "Put me through to a person" redirects the live call here.
+# Careful: if the AI is answering *because* this number was busy, transferring
+# back to it just bounces the caller. The bot therefore only offers a transfer
+# when the caller explicitly asks for a human.
+TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "+49 40 64421700")
 
 # Topics the bot must never improvise on -> take a callback request instead.
 ESCALATE_TOPICS = [

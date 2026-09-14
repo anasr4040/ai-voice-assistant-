@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS bookings (
     topic       TEXT,
     UNIQUE (slot_date, slot_time)
 );
+CREATE TABLE IF NOT EXISTS calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_sid    TEXT UNIQUE,
+    caller_id   TEXT,
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT,
+    outcome     TEXT
+);
 CREATE TABLE IF NOT EXISTS transcripts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
@@ -113,6 +121,42 @@ def add_booking(**fields: Any) -> int | None:
     except sqlite3.IntegrityError:
         # UNIQUE(slot_date, slot_time) -- someone else got it first.
         return None
+
+
+def start_call(call_sid: str | None, caller_id: str | None) -> None:
+    """Record that a call the office would otherwise have missed was answered."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO calls (call_sid, caller_id, started_at) VALUES (?, ?, ?)",
+            (call_sid, caller_id, config.now().isoformat(timespec="seconds")),
+        )
+
+
+def end_call(call_sid: str | None, outcome: str) -> None:
+    """Close out a call with what it achieved, for the capture-rate figure."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE calls SET ended_at = ?, outcome = ? WHERE call_sid IS ?",
+            (config.now().isoformat(timespec="seconds"), outcome, call_sid),
+        )
+
+
+def call_stats() -> dict:
+    """Calls answered, and how many ended with a booking or a phone number.
+
+    The capture rate is the number worth showing an owner who is losing calls:
+    every uncaptured call is a student who rang and left no trace.
+    """
+    with connect() as conn:
+        total = conn.execute("SELECT COUNT(*) AS n FROM calls").fetchone()["n"]
+        captured = conn.execute(
+            "SELECT COUNT(*) AS n FROM calls WHERE outcome IS NOT NULL AND outcome != ''"
+        ).fetchone()["n"]
+    return {
+        "total": total,
+        "captured": captured,
+        "rate": round(100 * captured / total) if total else 0,
+    }
 
 
 def add_transcript_line(call_sid: str | None, role: str, text: str) -> None:

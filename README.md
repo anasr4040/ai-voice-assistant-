@@ -1,58 +1,114 @@
 # Fahrschule Infinity — AI Telefonassistenz
 
-A German-speaking AI receptionist that answers the phone for a Hamburg driving
-school. It answers questions, books consultation appointments, takes callback
-requests, and hands callers to a human when they ask.
+A German-speaking AI receptionist that catches the calls Fahrschule Infinity
+currently misses. It answers questions, books consultation appointments, takes
+callback requests, and transfers to a human on request.
 
 Built on [Pipecat](https://github.com/pipecat-ai/pipecat). Cascaded pipeline
 (speech-to-text → LLM → text-to-speech) rather than a realtime speech-to-speech
-model, because it costs roughly a fifth as much per minute and every stage is
-swappable — which matters most for German voice quality.
+model: roughly a fifth the cost per minute, and every stage swaps via env var —
+which matters most for German voice quality.
 
-> **The business data in `src/receptionist/config.py` is invented.** Prices,
-> address and hours are plausible placeholders, not Infinity's real numbers.
-> Replace them before the owner hears this, or the bot will confidently quote
-> prices that do not exist. `uv run python tests/test_tools.py` lists what is
-> still a placeholder.
+> **The prices, address and hours in `src/receptionist/config.py` are invented
+> placeholders.** Have the owner fill in [`docs/FRAGEBOGEN.md`](docs/FRAGEBOGEN.md)
+> and transfer the answers first, or the bot will quote numbers that do not
+> exist. `scripts/preflight.py` warns you while they are still placeholder.
 
-## Quick start — browser, no phone number needed
+## The problem this solves
+
+Infinity loses calls when staff are teaching or already on the phone. Every
+missed call is a prospective student who rang once and left no trace. So the
+bot's single most important job is **not** sounding clever — it is never
+letting a caller hang up without leaving a name and number. If a caller is
+about to end the call with neither a booking nor a number, it asks exactly once,
+then lets them go.
+
+`/office` shows the number that matters: calls answered, and what share left
+contact details.
+
+## Setup (laptop)
 
 ```sh
 uv sync
-cp .env.example .env        # fill in DEEPGRAM_API_KEY, OPENAI_API_KEY, CARTESIA_API_KEY
+cp .env.example .env
+```
+
+Fill in four keys — the file has signup links and explains each one:
+
+| | Provider | Why this one |
+|---|---|---|
+| Hears | **Deepgram** | `nova-3` + `multi` handles German/English code-switching mid-sentence. Free signup credit covers a demo many times over |
+| Thinks | **OpenAI** `gpt-4o-mini` | Cheap, and reliable at the tool calling the booking flow depends on. Under a cent per call |
+| Speaks | **ElevenLabs** `eleven_flash_v2_5` | Best German of the affordable options. Switch to Cartesia (~half the price) once volume is real |
+| Phones | **Twilio** | Any voice number. A German `+49 40` number needs a regulatory bundle and days of approval — demo on any number, swap later |
+
+Then pick a voice from your own account and check everything works:
+
+```sh
+uv run python scripts/list_voices.py    # paste an ID into .env
+uv run python scripts/preflight.py      # tests every key against the live API
+```
+
+`preflight` exists because the failure mode that ruins a demo is not a crash —
+it is a call that connects and then sits in silence. It catches a wrong voice
+ID, a rejected key and placeholder prices before the owner dials.
+
+## Try it in a browser first
+
+```sh
 uv run bot.py
 ```
 
-Open <http://localhost:7860>, allow the microphone, and talk to it in German.
-The office view is at <http://localhost:7860/office>.
+Open <http://localhost:7860>, allow the microphone, talk to it in German.
+Office view: <http://localhost:7860/office>. No phone number needed.
 
-## Quick start — a real phone call
+## Put it on a real phone
 
-1. `ngrok http 7860` and copy the hostname.
-2. Buy a voice number in the Twilio console.
-3. Point the number's "A call comes in" webhook at `https://<ngrok-host>/`
-   (HTTP POST). The runner answers with the TwiML that opens the media stream.
-4. Put `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in `.env`.
-5. `uv run bot.py -t twilio -x <ngrok-host>`
-6. Call the number.
+```sh
+ngrok http 7860             # in a second terminal; copy the https hostname
+uv run bot.py -t twilio -x <ngrok-host>
+```
 
-A German `+49 40` Hamburg number needs a Twilio regulatory bundle with proof of
-a German address, which takes a few days to approve. Any number works for the
-demo; swap it later without touching the code.
+In the Twilio console, set your number's **A call comes in** webhook to
+`https://<ngrok-host>/` (HTTP POST), then call the number.
 
-## What it can do
+ngrok's free tier gives you one reserved domain — use it
+(`ngrok http --url=<your>.ngrok-free.app 7860`) so the Twilio webhook does not
+need reconfiguring every restart.
 
-| | |
+Your laptop must stay awake and the two commands running for the number to
+answer. That is fine for a scheduled demo call; it is not a deployment.
+
+## How it would actually run for Infinity
+
+The owner keeps their existing number. They set **conditional call forwarding**
+so only the calls they are already missing reach the AI:
+
+| Condition | GSM code |
 |---|---|
-| Answer questions | Hours, address, licence classes, prices, what to bring to registration, theory lesson times — all from `config.py` |
-| Book appointments | Free consultation slots only. Never double-books, never invents a slot |
-| Take callbacks | Name, number, topic → SQLite, email, and the `/office` page |
-| Transfer to a human | Redirects the live Twilio call to `TRANSFER_NUMBER`; falls back to a callback if unset |
-| German + English | Deepgram `nova-3` with `language=multi` handles code-switching mid-sentence |
+| No answer after ~20s | `*61*<twilio-number>#` |
+| Busy | `*67*<twilio-number>#` |
+| Cancel | `#61#` / `#67#` |
 
-It deliberately **cannot** book individual driving lessons (those depend on
-instructor availability) and refuses to answer on MPU, refunds, complaints and
-licence transfers — those become callback requests. See `ESCALATE_TOPICS`.
+Those codes are standard on mobile. On a Hamburg landline it depends on the
+provider — Telekom exposes the same feature as *Anrufweiterschaltung* in the
+customer portal. Confirm with whoever supplies the line before promising it.
+
+Nothing unconditional is forwarded, so staff answer exactly as they do today
+and the AI only ever picks up calls that would have rung out.
+
+## What it can and cannot do
+
+| Can | |
+|---|---|
+| Answer questions | Hours, licence classes, prices, what to bring to registration, theory times — all from `config.py` |
+| Book appointments | Free consultation slots only. Validated against real availability; a `UNIQUE` constraint makes double-booking impossible |
+| Take callbacks | Name, number, topic → SQLite, email, `/office`. Auto-fills the caller's number from Twilio |
+| Transfer | Redirects the live call to `TRANSFER_NUMBER` — only when asked, never offered, since the office being busy is why the AI answered |
+
+It deliberately **cannot** book individual driving lessons (instructor-dependent)
+and refuses to answer on MPU, refunds, complaints and licence transfers — those
+become callback requests. See `ESCALATE_TOPICS` in `config.py`.
 
 ## Layout
 
@@ -63,22 +119,15 @@ src/receptionist/
   prompts.py                system prompt, generated from config
   tools.py                  the 4 actions the bot can take
   bot.py                    the voice pipeline
-  store.py                  SQLite: leads, bookings, transcripts
+  store.py                  SQLite: calls, leads, bookings, transcripts
   notify.py                 email the office
   telephony.py              Twilio: caller lookup, call transfer
   dashboard.py              /office and /office.json
-tests/test_tools.py         offline check of every action, no API keys needed
-```
-
-## Swapping providers
-
-Everything is an env var; no code changes.
-
-```sh
-TTS_PROVIDER=elevenlabs     # more natural German, costs more
-LLM_PROVIDER=google         # gemini-2.5-flash, cheapest
-LLM_PROVIDER=anthropic      # claude-haiku-4-5
-STT_LANGUAGE=de             # German only, if code-switching misfires
+scripts/
+  preflight.py              test every credential before a demo
+  list_voices.py            German voices on your account, with IDs
+tests/test_tools.py         every action, offline, no API keys
+docs/FRAGEBOGEN.md          fill-in sheet for the owner
 ```
 
 ## Testing without spending money
@@ -87,13 +136,19 @@ STT_LANGUAGE=de             # German only, if code-switching misfires
 uv run python tests/test_tools.py
 ```
 
-Runs the booking, double-booking, lead-capture and transfer-fallback paths
+Booking, double-booking, unoffered slots, lead capture and transfer fallback,
 against a temporary database. No STT, LLM or TTS calls.
 
-## Before this goes live
+## Rough running cost
 
-- Replace every placeholder in `config.py` with real data.
-- Set `DASHBOARD_TOKEN` — `/office` shows real people's phone numbers.
-- Add a recording/AI disclosure to the greeting (GDPR). Germany requires
-  consent before recording; the bot currently stores transcripts, not audio.
-- Host inside the EU (Hetzner, Scaleway) and check each provider's DPA.
+About **€0.03–0.06 per minute** all-in, so ~300 calls × 3 min ≈ **€30–55/month**
+plus hosting. A managed platform would be €90–135 for the same volume. These are
+list-price estimates — verify against current pricing before quoting the owner.
+
+## Before this handles real callers
+
+- Transfer the questionnaire answers into `config.py`.
+- Set `DASHBOARD_TOKEN` — `/office` shows real phone numbers.
+- Move off the laptop (Hetzner ~€4/mo, EU hosting helps the GDPR conversation).
+- Decide on the AI disclosure in the greeting, and check each provider's DPA.
+  Transcripts are stored; audio is not.

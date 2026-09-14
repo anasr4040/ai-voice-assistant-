@@ -20,11 +20,11 @@ AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 API_ROOT = "https://api.twilio.com/2010-04-01"
 
 
-def _auth() -> aiohttp.BasicAuth | None:
-    """Basic auth for the Twilio REST API, or None if unconfigured."""
+def _auth_headers() -> dict[str, str] | None:
+    """Authorization header for the Twilio REST API, or None if unconfigured."""
     if not (ACCOUNT_SID and AUTH_TOKEN):
         return None
-    return aiohttp.BasicAuth(ACCOUNT_SID, AUTH_TOKEN)
+    return {"Authorization": aiohttp.encode_basic_auth(ACCOUNT_SID, AUTH_TOKEN)}
 
 
 async def caller_number(call_sid: str | None) -> str | None:
@@ -33,14 +33,14 @@ async def caller_number(call_sid: str | None) -> str | None:
     Used to pre-fill the callback number so the caller does not have to read
     their own number out to a machine.
     """
-    auth = _auth()
-    if not (call_sid and auth):
+    headers = _auth_headers()
+    if not (call_sid and headers):
         return None
 
     url = f"{API_ROOT}/Accounts/{ACCOUNT_SID}/Calls/{call_sid}.json"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, auth=auth) as response:
+            async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     logger.warning(f"Twilio call lookup failed: {response.status}")
                     return None
@@ -56,8 +56,8 @@ async def transfer_call(call_sid: str | None, to_number: str, say_first: str = "
     `say_first` is spoken by Twilio (not by our TTS) while the office rings,
     because our pipeline is gone the moment the TwiML is replaced.
     """
-    auth = _auth()
-    if not (call_sid and auth and to_number):
+    headers = _auth_headers()
+    if not (call_sid and headers and to_number):
         logger.warning("Transfer not possible: missing call_sid, credentials or target number.")
         return False
 
@@ -67,7 +67,7 @@ async def transfer_call(call_sid: str | None, to_number: str, say_first: str = "
     url = f"{API_ROOT}/Accounts/{ACCOUNT_SID}/Calls/{call_sid}.json"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, auth=auth, data={"Twiml": twiml}) as response:
+            async with session.post(url, headers=headers, data={"Twiml": twiml}) as response:
                 if response.status != 200:
                     logger.error(f"Transfer failed ({response.status}): {await response.text()}")
                     return False
