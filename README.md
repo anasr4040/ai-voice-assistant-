@@ -79,6 +79,18 @@ need reconfiguring every restart.
 Your laptop must stay awake and the two commands running for the number to
 answer. That is fine for a scheduled demo call; it is not a deployment.
 
+## Deploying
+
+`Dockerfile` and `fly.toml` are in the repo — Frankfurt region, ~€5/month,
+always on. See **[docs/DEPLOY.md](docs/DEPLOY.md)** for the walkthrough, the
+choice of phone number for a German caller, and how to lock down a public URL.
+
+**Vercel cannot host this.** A call is one WebSocket held open for the whole
+conversation; Vercel functions are request/response, frozen between
+invocations, with no writable disk. Same for Netlify, Cloudflare Workers and
+Lambda. This needs a small always-on container, which for a 24/7 low-volume
+workload is also the cheaper shape. DEPLOY.md has the detail.
+
 ## How it would actually run for Infinity
 
 The owner keeps their existing number. They set **conditional call forwarding**

@@ -1,0 +1,54 @@
+# Fly.io deployment. Frankfurt because it is the closest region to Hamburg
+# (every 10 ms of round trip is audible in a conversation) and keeps the audio
+# inside the EU, which makes the GDPR conversation with the owner much shorter.
+#
+#   fly launch --no-deploy --copy-config --name fahrschule-infinity-receptionist
+#   fly volumes create receptionist_data --region fra --size 1
+#   fly secrets set DEEPGRAM_API_KEY=... GOOGLE_API_KEY=... ELEVENLABS_API_KEY=...
+#   fly deploy
+
+app = "fahrschule-infinity-receptionist"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  DB_PATH = "/data/receptionist.db"
+  LLM_PROVIDER = "google"
+  TTS_PROVIDER = "elevenlabs"
+  STT_LANGUAGE = "multi"
+  DEEPGRAM_MODEL = "nova-3"
+  # Must match the hostname Twilio dials. Change it if you rename the app or
+  # attach a custom domain, or the runner hands Twilio a URL it cannot reach.
+  PUBLIC_HOSTNAME = "fahrschule-infinity-receptionist.fly.dev"
+
+# Captured leads and bookings. Without this volume every redeploy wipes them.
+[mounts]
+  source = "receptionist_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # A phone call is a WebSocket held open for its whole duration, and a machine
+  # that has scaled to zero cannot answer one: Twilio gives up long before a
+  # cold start finishes. This service stays up.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    path = "/status"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Measured ~132 MB idle; speech recognition and the voice-activity model add
+  # more per active call. 512 is usually enough, 1024 removes the risk of an
+  # out-of-memory kill mid-demo for about two euros a month.
+  memory = "1gb"
