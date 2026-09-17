@@ -8,6 +8,7 @@ Fahrschul-Software API later; nothing else has to change.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE TABLE IF NOT EXISTS transcripts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
-    call_sid    TEXT,
+    call_id     INTEGER,
     role        TEXT NOT NULL,
     text        TEXT NOT NULL
 );
@@ -85,6 +86,13 @@ def init() -> None:
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
         if "location" not in columns:
             conn.execute("ALTER TABLE bookings ADD COLUMN location TEXT")
+        # Transcripts moved from call_sid to call_id. They are a convenience,
+        # not a business record, so an old table is replaced rather than
+        # migrated.
+        transcript_columns = {r["name"] for r in conn.execute("PRAGMA table_info(transcripts)")}
+        if transcript_columns and "call_id" not in transcript_columns:
+            conn.execute("DROP TABLE transcripts")
+            conn.executescript(SCHEMA)
 
 
 # --- Writes ---------------------------------------------------------------
@@ -114,8 +122,9 @@ def add_booking(**fields: Any) -> int | None:
     try:
         with connect() as conn:
             cur = conn.execute(
-                "INSERT INTO bookings (created_at, call_sid, name, phone, slot_date, slot_time, topic)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO bookings"
+                " (created_at, call_sid, name, phone, slot_date, slot_time, location, topic)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     config.now().isoformat(timespec="seconds"),
                     fields.get("call_sid"),
@@ -123,6 +132,7 @@ def add_booking(**fields: Any) -> int | None:
                     fields["phone"],
                     fields["slot_date"],
                     fields["slot_time"],
+                    fields.get("location"),
                     fields.get("topic"),
                 ),
             )
@@ -176,12 +186,17 @@ def call_stats() -> dict:
     }
 
 
-def add_transcript_line(call_sid: str | None, role: str, text: str) -> None:
-    """Append one conversation turn, so the office can read back what was said."""
+def add_transcript_line(call_id: int | None, role: str, text: str) -> None:
+    """Append one conversation turn, so the office can read back what was said.
+
+    Keyed by call_id, not call_sid: browser calls have no sid, and matching on
+    a NULL sid mixes every browser call's transcript together -- the same trap
+    that corrupted the call outcomes.
+    """
     with connect() as conn:
         conn.execute(
-            "INSERT INTO transcripts (created_at, call_sid, role, text) VALUES (?, ?, ?, ?)",
-            (config.now().isoformat(timespec="seconds"), call_sid, role, text),
+            "INSERT INTO transcripts (created_at, call_id, role, text) VALUES (?, ?, ?, ?)",
+            (config.now().isoformat(timespec="seconds"), call_id, role, text),
         )
 
 
@@ -211,11 +226,11 @@ def taken_slots() -> set[tuple[str, str]]:
         return {(r["slot_date"], r["slot_time"]) for r in rows}
 
 
-def transcript_for(call_sid: str) -> list[dict]:
+def transcript_for(call_id: int) -> list[dict]:
     """Every turn of one call, in order."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM transcripts WHERE call_sid = ? ORDER BY id", (call_sid,)
+            "SELECT * FROM transcripts WHERE call_id = ? ORDER BY id", (call_id,)
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -242,6 +257,75 @@ def free_slots(within_days: int | None = None) -> list[dict]:
                 continue
             out.append({"date": iso, "time": hhmm, "weekday": weekday})
     return out
+
+
+# German hour words, because the prompt tells the bot to speak numbers as words
+# and the model then often hands them back the same way.
+_HOUR_WORDS = {
+    "null": 0,
+    "ein": 1,
+    "eins": 1,
+    "zwei": 2,
+    "drei": 3,
+    "vier": 4,
+    "fuenf": 5,
+    "fünf": 5,
+    "sechs": 6,
+    "sieben": 7,
+    "acht": 8,
+    "neun": 9,
+    "zehn": 10,
+    "elf": 11,
+    "zwoelf": 12,
+    "zwölf": 12,
+    "dreizehn": 13,
+    "vierzehn": 14,
+    "fuenfzehn": 15,
+    "fünfzehn": 15,
+    "sechzehn": 16,
+    "siebzehn": 17,
+    "achtzehn": 18,
+    "neunzehn": 19,
+    "zwanzig": 20,
+    "einundzwanzig": 21,
+    "zweiundzwanzig": 22,
+    "dreiundzwanzig": 23,
+    "vierundzwanzig": 24,
+}
+
+
+def parse_spoken_time(text: str) -> str | None:
+    """Map whatever the model calls a time onto 'HH:MM', or None if unclear.
+
+    Accepts '16:00', '16.00', '1600', '16', '16 Uhr', '16 Uhr 30', '16h' and
+    'sechzehn Uhr'. Returning None matters as much as parsing: an unrecognised
+    time must produce "say that again", not a booking at the wrong hour and not
+    a misleading "that slot is taken".
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        return None
+
+    # Strip the words that carry no information, keeping any digits around them.
+    cleaned = raw.replace("uhr", " ").replace("h", " ").strip()
+
+    numbers = re.findall(r"\d{1,4}", cleaned)
+    if numbers:
+        first = numbers[0]
+        if len(first) == 4:  # '1600'
+            hour, minute = int(first[:2]), int(first[2:])
+        else:
+            hour = int(first)
+            minute = int(numbers[1]) if len(numbers) > 1 else 0
+    else:
+        word = re.sub(r"[^a-zäöü]", "", raw.replace("uhr", ""))
+        if word not in _HOUR_WORDS:
+            return None
+        hour, minute = _HOUR_WORDS[word], 0
+
+    if not (0 <= hour <= 24 and 0 <= minute < 60):
+        return None
+    return f"{hour % 24:02d}:{minute:02d}"
 
 
 def parse_spoken_date(text: str) -> str | None:

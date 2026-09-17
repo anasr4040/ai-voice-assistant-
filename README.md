@@ -174,7 +174,20 @@ docs/FRAGEBOGEN.md          fill-in sheet for the owner
 ```sh
 uv run python tests/test_tools.py            # every action the bot can take
 uv run python tests/test_prompt_delivery.py  # the prompt reaches the model
+uv run python tests/test_pipeline_e2e.py     # a whole call, end to end, free
 ```
+
+**`test_pipeline_e2e.py` is the one that answers "will a real call work".** It
+runs the real pipeline — the real LLM service, the real adapter, Pipecat's real
+tool-call parsing and dispatch, the real tools, a real database — against a
+local server that speaks OpenAI's streaming protocol. Only the model's
+judgement is faked, so every line of our own plumbing executes. It costs
+nothing and needs no API keys.
+
+It exists because unit tests on the tools cannot catch wiring bugs. It found
+one immediately: `book_appointment` returned `location: "Barmbek"` while the
+database column stayed NULL, because `add_booking` silently dropped the field.
+The unit test asserted the tool's return value and passed.
 
 The first covers booking, double-booking, unoffered slots, unknown branches,
 lead capture and transfer fallback against a temporary database.

@@ -153,7 +153,7 @@ def _save_transcript(context: LLMContext, session: CallSession) -> None:
         role = message.get("role")
         content = message.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            store.add_transcript_line(session.call_sid, role, content.strip())
+            store.add_transcript_line(session.call_id, role, content.strip())
 
 
 async def _end_call_after(seconds: int, runner: WorkerRunner, session: CallSession) -> None:

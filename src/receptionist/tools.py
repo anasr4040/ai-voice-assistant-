@@ -135,9 +135,18 @@ async def book_appointment(
         )
         return
 
-    normalised = time.strip().replace(".", ":")
-    if len(normalised) == 2 and normalised.isdigit():
-        normalised = f"{normalised}:00"
+    normalised = store.parse_spoken_time(time)
+    if normalised is None:
+        # Distinct from "that slot is gone": telling a caller a free slot is
+        # taken because we could not read "16 Uhr" loses the booking and the
+        # caller has no way to recover.
+        await params.result_callback(
+            {
+                "booked": False,
+                "say": "Die Uhrzeit war unklar. Frage noch einmal nach der Uhrzeit.",
+            }
+        )
+        return
 
     # Only ever book a slot the school actually offers and that is still free.
     if not any(s["date"] == iso_date and s["time"] == normalised for s in store.free_slots()):

@@ -90,7 +90,15 @@ async def main() -> int:
         location="Barmbek",
     )
     check("booking accepted", params.result.get("booked") is True, str(params.result.get("date")))
-    check("branch recorded", params.result.get("location") == "Barmbek")
+    check("branch recorded in the tool result", params.result.get("location") == "Barmbek")
+    # The tool's return value said "Barmbek" while the database column stayed
+    # NULL, because add_booking dropped the field. Assert the stored row.
+    stored = [b for b in store.recent_bookings() if b["name"] == "Anna Schmidt"]
+    check(
+        "branch persisted to the database",
+        bool(stored) and stored[0]["location"] == "Barmbek",
+        str(stored[0]["location"]) if stored else "no row",
+    )
     check(
         "confirmation names the branch address",
         "Bramfelder" in params.result.get("say", ""),
@@ -205,6 +213,70 @@ async def main() -> int:
 
     # A malformed time took down the whole office dashboard.
     check("speak_time survives junk", config.speak_time("sechzehn Uhr") == "sechzehn Uhr")
+
+    print("\n8b. Times the model actually sends")
+    # "16 Uhr" is the most natural thing a German-speaking model emits. It used
+    # to be rejected, and the caller was told a free slot was taken.
+    for spoken, expected in [
+        ("16:00", "16:00"),
+        ("16", "16:00"),
+        ("16 Uhr", "16:00"),
+        ("sechzehn Uhr", "16:00"),
+        ("1600", "16:00"),
+        ("16 Uhr 30", "16:30"),
+        ("18h", "18:00"),
+    ]:
+        check(
+            f"parses {spoken!r}",
+            store.parse_spoken_time(spoken) == expected,
+            str(store.parse_spoken_time(spoken)),
+        )
+    for junk in ["", "quatsch", "25:00", "16:99", "halb vier"]:
+        check(f"refuses {junk!r} rather than guessing", store.parse_spoken_time(junk) is None)
+
+    free = store.free_slots()[0]
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Elif Kaya",
+        phone="+49170444",
+        day=free["date"],
+        time="sechzehn Uhr" if free["time"] == "16:00" else free["time"],
+        location="Harburg",
+    )
+    check(
+        "books from a spoken time",
+        params.result.get("booked") is True,
+        str(params.result.get("say"))[:40],
+    )
+
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Gul Demir",
+        phone="+49170555",
+        day=free["date"],
+        time="irgendwann",
+        location="Harburg",
+    )
+    check(
+        "unclear time asks again, not 'slot taken'",
+        params.result.get("booked") is False
+        and "Uhrzeit war unklar" in params.result.get("say", ""),
+        params.result.get("say", ""),
+    )
+
+    print("\n8c. Transcripts stay separate per call")
+    t1 = store.start_call(None, "+4900001")
+    t2 = store.start_call(None, "+4900002")
+    store.add_transcript_line(t1, "user", "erste")
+    store.add_transcript_line(t1, "assistant", "antwort")
+    store.add_transcript_line(t2, "user", "zweite")
+    check(
+        "two calls do not share a transcript",
+        len(store.transcript_for(t1)) == 2 and len(store.transcript_for(t2)) == 1,
+        f"{len(store.transcript_for(t1))} / {len(store.transcript_for(t2))}",
+    )
 
     print("\n9. The bot must not state things we never confirmed")
     prompt = system_prompt()
