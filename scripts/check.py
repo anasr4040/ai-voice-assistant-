@@ -25,8 +25,14 @@ FREE_SUITES = [
 ]
 
 
-def run(path: str) -> tuple[bool, str]:
-    """Run one suite, returning (passed, last meaningful line of output)."""
+def run(path: str) -> tuple[bool, str, str]:
+    """Run one suite.
+
+    Returns (passed, one-line summary, detail). `detail` is empty on success
+    and carries the real error on failure -- a crashed suite used to be
+    summarised with whatever traceback frame happened to be last, which told
+    the reader nothing about what went wrong.
+    """
     result = subprocess.run(
         [sys.executable, str(ROOT / path)],
         capture_output=True,
@@ -34,16 +40,43 @@ def run(path: str) -> tuple[bool, str]:
         cwd=ROOT,
         timeout=600,
     )
+    output = result.stdout + result.stderr
     lines = [
         line
-        for line in (result.stdout + result.stderr).splitlines()
+        for line in output.splitlines()
         if line.strip() and "nltk" not in line and not line.startswith("[")
     ]
-    summary = next(
-        (line for line in reversed(lines) if "passed" in line or "provider" in line),
-        lines[-1] if lines else "no output",
+
+    if result.returncode == 0:
+        summary = next(
+            (line for line in reversed(lines) if "passed" in line or "provider" in line),
+            lines[-1] if lines else "no output",
+        )
+        return True, summary.strip(), ""
+
+    # A clean assertion failure names itself; a crash needs the exception line.
+    reported = [line for line in lines if line.lstrip().startswith(("PASS", "FAIL", "TODO"))]
+    failed_checks = [line.strip() for line in reported if line.lstrip().startswith("FAIL")]
+    exception = next(
+        (
+            line.strip()
+            for line in reversed(lines)
+            if ("Error" in line or "Exception" in line) and not line.startswith(" ")
+        ),
+        "",
     )
-    return result.returncode == 0, summary.strip()
+
+    if failed_checks:
+        summary = f"{len(failed_checks)} check(s) failed"
+        detail = "\n".join(f"        {c}" for c in failed_checks[:8])
+    elif exception:
+        summary = "crashed before finishing"
+        detail = f"        {exception}"
+    else:
+        summary = "failed"
+        detail = "\n".join(f"        {line}" for line in lines[-8:])
+
+    return False, summary, detail
 
 
 def main() -> int:
@@ -55,15 +88,20 @@ def main() -> int:
     for label, path in FREE_SUITES:
         print(f"\n  {label}")
         print(f"  running {path} ...", flush=True)
-        ok, summary = run(path)
+        ok, summary, detail = run(path)
         print(f"  {'PASS' if ok else 'FAIL'}  {summary}")
+        if detail:
+            print(detail)
         if not ok:
-            failures.append(label)
+            failures.append((label, path))
 
     if failures:
         print("\n" + "=" * 62)
-        print(f"STOP. {len(failures)} suite(s) failed: {', '.join(failures)}")
-        print("Do not spend credits until these pass. Paste the output above.")
+        print(f"STOP. {len(failures)} suite(s) failed:")
+        for label, path in failures:
+            print(f"  - {label}")
+            print(f"    full output:  uv run python {path}")
+        print("\nDo not spend credits until these pass.")
         print("=" * 62)
         return 1
 

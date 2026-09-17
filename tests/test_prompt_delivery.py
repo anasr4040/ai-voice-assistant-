@@ -22,16 +22,22 @@ from pathlib import Path
 os.environ["DB_PATH"] = str(Path(tempfile.mkdtemp()) / "test.db")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-os.environ.setdefault("OPENAI_API_KEY", "test")
-os.environ.setdefault("GOOGLE_API_KEY", "test")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test")
-
 from loguru import logger  # noqa: E402
 
 from receptionist import bot, store  # noqa: E402
 
 # The services log the entire system prompt at DEBUG on construction.
 logger.remove()
+
+# These must be set AFTER importing bot, and by assignment rather than
+# setdefault: bot.py calls load_dotenv(override=True), so a freshly copied
+# .env -- which has every key present but blank -- replaces placeholders set
+# earlier with empty strings, and the service constructors then raise
+# "Missing credentials". This test only inspects what *would* be sent and never
+# makes a request, so a dummy key is correct, and forcing it also keeps the
+# test off the user's real keys.
+for _var in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"):
+    os.environ[_var] = "placeholder-no-request-is-made"
 from receptionist.prompts import system_prompt  # noqa: E402
 from receptionist.tools import TOOLS  # noqa: E402
 
