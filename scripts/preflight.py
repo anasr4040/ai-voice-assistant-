@@ -78,8 +78,45 @@ async def check_deepgram(session: aiohttp.ClientSession) -> None:
             report(BAD, "Deepgram", f"key rejected ({response.status})")
 
 
+VALID_PROVIDERS = ("openai", "xai", "grok", "google", "anthropic")
+
+
 async def check_llm(session: aiohttp.ClientSession) -> None:
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+    if provider not in VALID_PROVIDERS:
+        report(
+            BAD,
+            "LLM provider",
+            f"LLM_PROVIDER={provider!r} is not a provider. Use one of: "
+            "openai, xai, google, anthropic. If the line looks like "
+            "'LLM_PROVIDER=xai   LLM_MODEL=...', split it onto two lines.",
+        )
+        return
+
+    # The most common misconfiguration: a provider selected whose key is blank
+    # or commented out. It passes every offline check and fails on the call.
+    key_for = {
+        "openai": "OPENAI_API_KEY",
+        "xai": "XAI_API_KEY",
+        "grok": "XAI_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
+    if not os.getenv(key_for[provider]):
+        others = [name for prov, name in key_for.items() if prov != provider and os.getenv(name)]
+        hint = (
+            f" You did set {', '.join(sorted(set(others)))} -- "
+            f"did you mean to select that provider instead?"
+            if others
+            else ""
+        )
+        report(
+            BAD,
+            "LLM provider",
+            f"LLM_PROVIDER={provider} but {key_for[provider]} is empty or commented out.{hint}",
+        )
+        return
 
     if provider == "openai":
         key = os.getenv("OPENAI_API_KEY")
