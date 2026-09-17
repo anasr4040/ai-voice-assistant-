@@ -195,7 +195,22 @@ nicht, frage das eine Mal nach, bevor du dich verabschiedest.
 """
 
 
-GREETING_INSTRUCTION = (
-    "Begruesse den Anrufer jetzt auf Deutsch, in einem Satz: nenne die Fahrschule "
-    "und deinen Namen, und frage, wie du helfen kannst. Halte es kurz."
-)
+def greeting_line() -> str:
+    """The exact words the bot opens with.
+
+    Fixed rather than generated, for three reasons found in a real call: an
+    LLM-written greeting fired twice when the caller made a noise during
+    connection setup, one of those greetings hallucinated "I noticed you spoke
+    English" before the caller had said anything, and generating it spent an
+    LLM request on the one line of the call that never needs to vary. A
+    receptionist saying the same first sentence every time is correct anyway.
+    """
+    return (
+        f"Guten Tag, {config.BUSINESS['name']}, mein Name ist {config.ASSISTANT_NAME}. "
+        "Wie kann ich Ihnen helfen?"
+    )
+
+
+# Said when the model is unreachable -- a rate limit, an outage, a timeout.
+# Anything is better than dead air, which makes a caller hang up.
+FALLBACK_LINE = "Entschuldigung, einen kurzen Moment bitte, ich habe Sie gerade nicht verstanden."

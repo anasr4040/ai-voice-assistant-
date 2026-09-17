@@ -58,7 +58,7 @@ Fill in four keys — the file has signup links and explains each one:
 | | Provider | Why this one |
 |---|---|---|
 | Hears | **Deepgram** | `nova-3` + `multi` handles German/English code-switching mid-sentence. Free signup credit covers a demo many times over |
-| Thinks | **Google** `gemini-3.6-flash` | Free tier at aistudio.google.com, no card needed. Swap to OpenAI `gpt-4o-mini` or Anthropic `claude-haiku-4-5` with one env var |
+| Thinks | **xAI** `grok-4.20-non-reasoning` | Any paid provider beats a free tier here: one conversation turn is one request, and Google's free tier allows 5 per minute, so a call runs out of quota mid-sentence. `LLM_PROVIDER` also takes `openai`, `anthropic` and `google` |
 | Speaks | **ElevenLabs** `eleven_flash_v2_5` | Best German of the affordable options. Switch to Cartesia (~half the price) once volume is real |
 | Phones | **Twilio** | Any voice number. A German `+49 40` number needs a regulatory bundle and days of approval — demo on any number, swap later |
 
