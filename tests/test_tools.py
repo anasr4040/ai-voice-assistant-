@@ -310,6 +310,21 @@ async def main() -> int:
         f"{len(store.transcript_for(t1))} / {len(store.transcript_for(t2))}",
     )
 
+    print("\n8d. Speaking rules the first real call broke")
+    prompt_text = system_prompt()
+    for label, marker in [
+        ("caps answer length in words", "hoechstens 25 Woerter"),
+        ("shows a too-long answer as the bad example", "dreizehn Sekunden"),
+        ("forbids reading out lists", "Keine Listen vorlesen"),
+        ("one question per turn", "Nur eine Frage pro Antwort"),
+        ("forbids narrating its own next action", "Nicht ankuendigen"),
+        ("confirm details once, not repeatedly", "genau einmal bestaetigen"),
+        ("bans 'sixteen o'clock' in English", "sixteen o'clock"),
+        ("gives the English time form", "four p.m."),
+        ("stops asserting what the caller wants", "Stelle nicht fest, was der Anrufer will"),
+    ]:
+        check(label, marker in prompt_text)
+
     print("\n9. The bot must not state things we never confirmed")
     prompt = system_prompt()
     check(

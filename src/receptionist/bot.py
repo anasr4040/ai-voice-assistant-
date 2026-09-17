@@ -118,6 +118,17 @@ def build_llm(system_instruction: str):
             ),
         )
 
+    if provider != "openai":
+        # Previously any unrecognised value fell through to OpenAI, so a typo
+        # like "gogle", or an LLM_PROVIDER line that accidentally swallowed a
+        # second setting, produced a confusing "missing OpenAI key" instead of
+        # naming the real mistake.
+        raise ValueError(
+            f"LLM_PROVIDER={provider!r} is not a provider. "
+            "Use one of: openai, xai, google, anthropic. "
+            "Check that the LLM_PROVIDER line in .env holds only the provider name."
+        )
+
     from pipecat.services.openai.llm import OpenAILLMService
 
     return OpenAILLMService(
