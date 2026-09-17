@@ -20,7 +20,7 @@ import sys
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -73,7 +73,7 @@ def build_stt():
 def build_llm(system_instruction: str):
     """The brain. Cheap and fast beats clever here -- it is reading off a script.
 
-    LLM_PROVIDER: openai (default) | google | anthropic
+    LLM_PROVIDER: openai (default) | xai | google | anthropic
 
     The system prompt goes on the service, not into LLMContext as a "system"
     message. That form is deprecated since Pipecat 1.9 and, worse, the Google
@@ -89,6 +89,20 @@ def build_llm(system_instruction: str):
             api_key=os.getenv("GOOGLE_API_KEY", ""),
             settings=GoogleLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "gemini-3.6-flash"),
+                system_instruction=system_instruction,
+            ),
+        )
+
+    if provider in ("xai", "grok"):
+        # Grok speaks the OpenAI protocol, so GrokLLMService is a thin subclass
+        # of the OpenAI one with x.ai's base URL. Non-reasoning by default:
+        # reasoning latency is audible in a conversation.
+        from pipecat.services.xai.llm import GrokLLMService
+
+        return GrokLLMService(
+            api_key=os.getenv("XAI_API_KEY", ""),
+            settings=GrokLLMService.Settings(
+                model=os.getenv("LLM_MODEL", "grok-4.20-non-reasoning"),
                 system_instruction=system_instruction,
             ),
         )
@@ -216,8 +230,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
         session.call_id = store.start_call(session.call_sid, session.caller_id)
         if MAX_CALL_SECONDS > 0:
             watchdog = asyncio.create_task(_end_call_after(MAX_CALL_SECONDS, runner, session))
-        context.add_message({"role": "developer", "content": prompts.GREETING_INSTRUCTION})
-        await worker.queue_frames([LLMRunFrame()])
+        # Speak a fixed line and tell the context it was said, rather than
+        # asking the model to compose it. See prompts.greeting_line().
+        greeting = prompts.greeting_line()
+        context.add_message({"role": "assistant", "content": greeting})
+        await worker.queue_frames([TTSSpeakFrame(greeting)])
+
+    @worker.event_handler("on_pipeline_error")
+    async def on_pipeline_error(worker, frame):
+        # A rate limit, an outage or a timeout otherwise reaches the caller as
+        # dead air, and people hang up on silence.
+        logger.error(f"Pipeline error: {frame.error}")
+        session.note("Technischer Fehler im Gespraech")
+        await worker.queue_frames([TTSSpeakFrame(prompts.FALLBACK_LINE)])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

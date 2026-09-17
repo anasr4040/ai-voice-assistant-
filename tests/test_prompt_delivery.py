@@ -36,7 +36,7 @@ logger.remove()
 # "Missing credentials". This test only inspects what *would* be sent and never
 # makes a request, so a dummy key is correct, and forcing it also keeps the
 # test off the user's real keys.
-for _var in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"):
+for _var in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY"):
     os.environ[_var] = "placeholder-no-request-is-made"
 from receptionist.prompts import system_prompt  # noqa: E402
 from receptionist.tools import TOOLS  # noqa: E402
@@ -46,6 +46,8 @@ CANARY = "Fahrschule Infinity"
 
 ADAPTERS = {
     "openai": ("pipecat.adapters.services.open_ai_adapter", "OpenAILLMAdapter"),
+    # Grok speaks the OpenAI protocol, so it uses the same adapter.
+    "xai": ("pipecat.adapters.services.open_ai_adapter", "OpenAILLMAdapter"),
     "google": ("pipecat.adapters.services.gemini_adapter", "GeminiLLMAdapter"),
     "anthropic": ("pipecat.adapters.services.anthropic_adapter", "AnthropicLLMAdapter"),
 }

@@ -98,6 +98,34 @@ async def check_llm(session: aiohttp.ClientSession) -> None:
             )
         return
 
+    if provider in ("xai", "grok"):
+        key = os.getenv("XAI_API_KEY")
+        if not key:
+            report(BAD, "xAI", "XAI_API_KEY not set")
+            return
+        wanted = os.getenv("LLM_MODEL", "grok-4.20-non-reasoning")
+        async with session.get(
+            "https://api.x.ai/v1/models", headers={"Authorization": f"Bearer {key}"}
+        ) as response:
+            if response.status != 200:
+                report(BAD, "xAI", f"key rejected ({response.status})")
+                return
+            payload = await response.json()
+        available = [m.get("id") for m in payload.get("data", []) if m.get("id")]
+        if not available:
+            report(WARN, "xAI", f"key valid; could not list models to verify {wanted}")
+        elif wanted in available:
+            report(OK, "xAI", f"model={wanted} available on this account")
+        else:
+            fast = [m for m in available if "non-reasoning" in m or "fast" in m]
+            report(
+                BAD,
+                "xAI",
+                f"model {wanted} not on this account. Set LLM_MODEL to one of: "
+                f"{', '.join((fast or available)[:3])}",
+            )
+        return
+
     if provider == "google":
         key = os.getenv("GOOGLE_API_KEY")
         if not key:
