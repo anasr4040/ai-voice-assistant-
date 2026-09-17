@@ -302,6 +302,21 @@ async def main() -> int:
         f"{len(store.transcript_for(t1))} / {len(store.transcript_for(t2))}",
     )
 
+    print("\n8h. Tone and language rules the third call broke")
+    prompt_text = system_prompt()
+    for label, marker in [
+        ("a single word never switches language", "Ein einzelnes Wort wechselt NIE"),
+        ("knows STT mangles short German as English", 'aus "ja" wird "yeah"'),
+        ("needs two full English sentences to switch", "zwei vollstaendige Saetze"),
+        ("falls back to the last full sentence", "zuletzt einen ganzen"),
+        ("answers vague questions instead of interrogating", "antworte, statt auszufragen"),
+        ("shows the interrogation as the bad example", "Verhoer"),
+        ("offers two options rather than an open question", "nenne zwei Moeglichkeiten"),
+        ("has a calm tone section", "nervoes oder spricht nicht gut Deutsch"),
+        ("reassures a caller apologising for their German", "wir sprechen langsam"),
+    ]:
+        check(label, marker in prompt_text)
+
     print("\n8e. Dates in BOTH languages the bot speaks")
     # The bot switches to English mid-call and the model then passes English
     # weekday names. A German-only parser answered "I do not understand the
