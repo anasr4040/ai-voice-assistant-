@@ -38,8 +38,46 @@ class CallSession:
         logger.info(f"[call {self.call_sid or 'web'}] {what}")
 
 
+# Weekday names for the English side of the call, so the model never translates.
+_WEEKDAY_EN = {
+    "Montag": "Monday",
+    "Dienstag": "Tuesday",
+    "Mittwoch": "Wednesday",
+    "Donnerstag": "Thursday",
+    "Freitag": "Friday",
+    "Samstag": "Saturday",
+    "Sonntag": "Sunday",
+}
+
+
+def _slot_id(slot: dict) -> str:
+    """Opaque identifier for a slot: the only thing booking accepts.
+
+    The model used to be handed "Dienstag um 16 Uhr" and had to convert that to
+    a 12-hour English time for the caller and back to 24-hour for the booking
+    call. It got 16 Uhr wrong as "3 p.m.", offered that to the caller, and then
+    its own booking was refused as an unoffered slot -- two minutes of the
+    caller guessing times. Passing an id back removes the arithmetic entirely.
+    """
+    return f"{slot['date']}T{slot['time']}"
+
+
+def _describe_slot(slot: dict) -> dict:
+    """A slot the model can read out in either language without converting it."""
+    hour = int(slot["time"].split(":")[0])
+    minute = slot["time"].split(":")[1]
+    suffix = "a.m." if hour < 12 else "p.m."
+    hour_12 = hour % 12 or 12
+    english_time = f"{hour_12} {suffix}" if minute == "00" else f"{hour_12}:{minute} {suffix}"
+    return {
+        "slot_id": _slot_id(slot),
+        "say_german": f"{slot['weekday']} um {config.speak_time(slot['time'])}",
+        "say_english": f"{_WEEKDAY_EN.get(slot['weekday'], slot['weekday'])} at {english_time}",
+    }
+
+
 def _speak_slot(slot: dict) -> str:
-    """One bookable slot, phrased for speech."""
+    """One bookable slot, phrased for German speech."""
     return f"{slot['weekday']} um {config.speak_time(slot['time'])}"
 
 
@@ -59,10 +97,17 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
     if day:
         wanted = store.parse_spoken_date(day)
         if wanted is None:
+            # Offer what exists instead of dead-ending. Refusing here used to
+            # send the conversation into a loop: the caller kept naming days,
+            # the parser kept rejecting them, and nobody could get out.
             await params.result_callback(
                 {
-                    "understood": False,
-                    "say": "Ich habe den Tag nicht verstanden. Bitte noch einmal, welcher Tag?",
+                    "available": bool(slots),
+                    "slots": [_describe_slot(s) for s in slots[:3]],
+                    "say": (
+                        "Den Tag hast du nicht sicher verstanden. Nenne einfach die "
+                        "naechsten freien Termine, wortwoertlich, und frage, welcher passt."
+                    ),
                 }
             )
             return
@@ -83,11 +128,11 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
     await params.result_callback(
         {
             "available": bool(offer),
-            "slots": [
-                {"date": s["date"], "time": s["time"], "spoken": _speak_slot(s)} for s in offer
-            ],
+            "slots": [_describe_slot(s) for s in offer],
             "say": (
-                "Nenne hoechstens zwei dieser Termine und frage, welcher passt."
+                "Nenne hoechstens zwei dieser Termine, wortwoertlich wie in say_german "
+                "oder say_english. Rechne Uhrzeiten NIE selbst um. Zum Buchen gibst du "
+                "die slot_id genau so zurueck, wie sie hier steht."
                 if offer
                 else "In den naechsten zwei Wochen ist nichts frei. Biete einen Rueckruf an."
             ),
@@ -96,27 +141,26 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
 
 
 async def book_appointment(
-    params: FunctionCallParams, name: str, phone: str, day: str, time: str, location: str
+    params: FunctionCallParams, name: str, phone: str, slot_id: str, location: str
 ) -> None:
     """Book a free consultation appointment at one branch of the driving school.
 
-    Only call this after the caller has confirmed a specific day, time and
-    branch, and after you have read their phone number back to them. Never
-    invent a slot -- use check_available_appointments first.
+    Call check_available_appointments first and pass back one of the slot_id
+    values it returned, exactly as written. Never build a slot_id yourself and
+    never convert a time: an invented slot is refused, which leaves the caller
+    guessing.
 
     Args:
         name: The caller's full name as they said it.
         phone: The caller's phone number, digits only, with country code if given.
-        day: The agreed day, for example "Dienstag", "morgen" or "2026-10-15".
-        time: The agreed time in 24 hour format, for example "16:00".
+        slot_id: A slot_id from check_available_appointments, copied exactly.
         location: Which branch the caller wants: Barmbek, Billstedt, Harburg or
             Langenhorn. Ask the caller if they have not said.
     """
     session: CallSession = params.app_resources
-    iso_date = store.parse_spoken_date(day)
 
     branch = next(
-        (name for name in config.LOCATIONS if name.lower() == (location or "").strip().lower()),
+        (name_ for name_ in config.LOCATIONS if name_.lower() == (location or "").strip().lower()),
         None,
     )
     if branch is None:
@@ -129,32 +173,19 @@ async def book_appointment(
         )
         return
 
-    if iso_date is None:
-        await params.result_callback(
-            {"booked": False, "say": "Der Tag war unklar. Frage noch einmal nach dem Tag."}
-        )
-        return
-
-    normalised = store.parse_spoken_time(time)
-    if normalised is None:
-        # Distinct from "that slot is gone": telling a caller a free slot is
-        # taken because we could not read "16 Uhr" loses the booking and the
-        # caller has no way to recover.
+    # Only ever book a slot we actually offered and that is still free. Matching
+    # on the id means a mistyped or invented time cannot become a wrong booking.
+    match = next((s for s in store.free_slots() if _slot_id(s) == (slot_id or "").strip()), None)
+    if match is None:
+        alternatives = [_describe_slot(s) for s in store.free_slots()[:3]]
         await params.result_callback(
             {
                 "booked": False,
-                "say": "Die Uhrzeit war unklar. Frage noch einmal nach der Uhrzeit.",
-            }
-        )
-        return
-
-    # Only ever book a slot the school actually offers and that is still free.
-    if not any(s["date"] == iso_date and s["time"] == normalised for s in store.free_slots()):
-        await params.result_callback(
-            {
-                "booked": False,
-                "alternatives": [_speak_slot(s) for s in store.free_slots()[:3]],
-                "say": "Dieser Termin ist nicht mehr frei. Entschuldige dich kurz und biete eine Alternative an.",
+                "alternatives": alternatives,
+                "say": (
+                    "Diese slot_id gibt es nicht oder sie ist vergeben. Nenne eine der "
+                    "Alternativen und buche dann mit deren slot_id. Erfinde keine Uhrzeit."
+                ),
             }
         )
         return
@@ -163,8 +194,8 @@ async def book_appointment(
         call_sid=session.call_sid,
         name=name,
         phone=phone or session.caller_id or "",
-        slot_date=iso_date,
-        slot_time=normalised,
+        slot_date=match["date"],
+        slot_time=match["time"],
         location=branch,
         topic="Beratungsgespraech",
     )
@@ -174,26 +205,25 @@ async def book_appointment(
         )
         return
 
-    session.note(f"Termin gebucht: {name}, {iso_date} {normalised}, Filiale {branch}")
+    session.note(f"Termin gebucht: {name}, {match['date']} {match['time']}, Filiale {branch}")
     await notify.notify_booking(
         name=name,
         phone=phone or session.caller_id or "",
-        slot_date=iso_date,
-        slot_time=normalised,
-        topic="Beratungsgespraech",
+        slot_date=match["date"],
+        slot_time=match["time"],
+        topic=f"Beratungsgespraech, Filiale {branch}",
     )
 
     address = config.location_address(branch)
-    where = f"in der Filiale {branch}" + (f", {address}" if address else "")
+    described = _describe_slot(match)
+    where = f"Filiale {branch}" + (f", {address}" if address else "")
     await params.result_callback(
         {
             "booked": True,
-            "date": iso_date,
-            "time": normalised,
             "location": branch,
             "say": (
-                f"Bestaetige den Termin in einem Satz: {name}, {iso_date} um "
-                f"{config.speak_time(normalised)}, {where}. "
+                f"Bestaetige jetzt EINMAL, in einem Satz: {name}, "
+                f"{described['say_german']} (englisch: {described['say_english']}), {where}. "
                 + ("" if address else "Die genaue Adresse schickt ein Kollege per SMS nach. ")
                 + "Frage dann, ob du sonst noch helfen kannst."
             ),

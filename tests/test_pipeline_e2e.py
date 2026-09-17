@@ -43,6 +43,7 @@ from pipecat.services.openai.llm import OpenAILLMService  # noqa: E402
 from pipecat.workers.runner import WorkerRunner  # noqa: E402
 
 from receptionist import prompts, store  # noqa: E402
+from receptionist import tools as tools_module  # noqa: E402
 from receptionist.tools import TOOLS, CallSession  # noqa: E402
 
 PASSED, FAILED = [], []
@@ -173,7 +174,7 @@ async def main() -> int:
     )
 
     print("\n3. A booking round-trips through the real dispatch")
-    slot = store.free_slots()[0]
+    slot = tools_module._describe_slot(store.free_slots()[0])
     fake = await drive(
         [
             {
@@ -181,8 +182,7 @@ async def main() -> int:
                 "args": {
                     "name": "Ben Meier",
                     "phone": "+4915112345",
-                    "day": slot["date"],
-                    "time": slot["time"],
+                    "slot_id": slot["slot_id"],
                     "location": "Barmbek",
                 },
             },
@@ -195,7 +195,11 @@ async def main() -> int:
     check("booking was written", len(bookings) == 1)
     if bookings:
         check("branch recorded", bookings[0]["location"] == "Barmbek", str(bookings[0]["location"]))
-        check("slot matches what was asked", bookings[0]["slot_date"] == slot["date"])
+        check(
+            "slot matches the id that was offered",
+            bookings[0]["slot_date"] in slot["slot_id"],
+            slot["slot_id"],
+        )
 
     print("\n4. A bad tool call is refused, not crashed on")
     fake = await drive(
@@ -205,8 +209,7 @@ async def main() -> int:
                 "args": {
                     "name": "Carla",
                     "phone": "+49170",
-                    "day": slot["date"],
-                    "time": slot["time"],
+                    "slot_id": slot["slot_id"],
                     "location": "Altona",  # not a real branch
                 },
             },

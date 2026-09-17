@@ -38,7 +38,10 @@ async def _send_via_resend(subject: str, body: str) -> bool:
     """
     payload = {
         "from": f"{config.BUSINESS['name']} <{RESEND_FROM}>",
-        "to": [NOTIFY_EMAIL],
+        # Lowercased: Resend's test sender matches the recipient against the
+        # account address exactly, so "Anas.rabbani.uni@..." was refused where
+        # "anas.rabbani.uni@..." is accepted.
+        "to": [NOTIFY_EMAIL.strip().lower()],
         "subject": subject,
         "text": body,
     }

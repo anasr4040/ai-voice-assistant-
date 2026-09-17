@@ -243,9 +243,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
             watchdog = asyncio.create_task(_end_call_after(MAX_CALL_SECONDS, runner, session))
         # Speak a fixed line and tell the context it was said, rather than
         # asking the model to compose it. See prompts.greeting_line().
-        greeting = prompts.greeting_line()
-        context.add_message({"role": "assistant", "content": greeting})
-        await worker.queue_frames([TTSSpeakFrame(greeting)])
+        # No add_message here: the assistant aggregator already records what TTS
+        # speaks, and adding it manually put the greeting in the context twice.
+        await worker.queue_frames([TTSSpeakFrame(prompts.greeting_line())])
 
     @worker.event_handler("on_pipeline_error")
     async def on_pipeline_error(worker, frame):

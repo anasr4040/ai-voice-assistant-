@@ -261,6 +261,17 @@ def free_slots(within_days: int | None = None) -> list[dict]:
 
 # German hour words, because the prompt tells the bot to speak numbers as words
 # and the model then often hands them back the same way.
+# Index-aligned with config.WEEKDAY_NAMES.
+_WEEKDAY_EN_NAMES = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
 _HOUR_WORDS = {
     "null": 0,
     "ein": 1,
@@ -345,8 +356,13 @@ def parse_spoken_date(text: str) -> str | None:
     if raw in ("uebermorgen", "übermorgen"):
         return (today + timedelta(days=2)).isoformat()
 
+    # Both languages: the bot switches to English mid-call, and the model then
+    # passes English weekday names. A German-only parser answered "I do not
+    # understand the day", the model relayed that as "not available", and the
+    # caller spent two minutes guessing times that were never the problem.
     for index, name in enumerate(config.WEEKDAY_NAMES):
-        if raw.startswith(name.lower()):
+        english = _WEEKDAY_EN_NAMES[index]
+        if raw.startswith(name.lower()) or raw.startswith(english):
             ahead = (index - today.weekday()) % 7 or 7
             return (today + timedelta(days=ahead)).isoformat()
 

@@ -69,14 +69,14 @@ async def main() -> int:
     check("offers at most 3", len(slots) <= 3)
     check(
         "slots are speakable",
-        all("spoken" in s for s in slots),
-        slots[0]["spoken"] if slots else "",
+        all("say_german" in s and "say_english" in s for s in slots),
+        slots[0]["say_german"] if slots else "",
     )
 
     print("\n2. Caller asks for a day we cannot parse")
     params = FakeParams(session)
     await tools.check_available_appointments(params, day="irgendwann mal")
-    check("asks again instead of guessing", params.result.get("understood") is False)
+    check("offers slots instead of dead-ending", bool(params.result.get("slots")))
 
     print("\n3. Caller books a real slot")
     first = slots[0]
@@ -85,11 +85,10 @@ async def main() -> int:
         params,
         name="Anna Schmidt",
         phone="+4917612345678",
-        day=first["date"],
-        time=first["time"],
+        slot_id=first["slot_id"],
         location="Barmbek",
     )
-    check("booking accepted", params.result.get("booked") is True, str(params.result.get("date")))
+    check("booking accepted", params.result.get("booked") is True, first["slot_id"])
     check("branch recorded in the tool result", params.result.get("location") == "Barmbek")
     # The tool's return value said "Barmbek" while the database column stayed
     # NULL, because add_booking dropped the field. Assert the stored row.
@@ -111,8 +110,7 @@ async def main() -> int:
         params,
         name="Ben Meier",
         phone="+49170000",
-        day=first["date"],
-        time=first["time"],
+        slot_id=first["slot_id"],
         location="Barmbek",
     )
     check("double booking refused", params.result.get("booked") is False)
@@ -124,8 +122,7 @@ async def main() -> int:
         params,
         name="Carla Weiss",
         phone="+49170111",
-        day=first["date"],
-        time="03:00",
+        slot_id=first["slot_id"].replace("T16:00", "T03:00"),
         location="Barmbek",
     )
     check("refuses unoffered slot", params.result.get("booked") is False)
@@ -136,22 +133,20 @@ async def main() -> int:
         params,
         name="Emil Braun",
         phone="+49170222",
-        day=first["date"],
-        time=first["time"],
+        slot_id=first["slot_id"],
         location="Altona",
     )
     check("refuses unknown branch", params.result.get("booked") is False)
     check("offers the four real branches", len(params.result.get("locations", [])) == 4)
 
     print("\n5c. Branch with no street on file is still bookable")
-    free = store.free_slots()[0]
+    free = tools._describe_slot(store.free_slots()[0])
     params = FakeParams(session)
     await tools.book_appointment(
         params,
         name="Fatima Yilmaz",
         phone="+49170333",
-        day=free["date"],
-        time=free["time"],
+        slot_id=free["slot_id"],
         location="Billstedt",
     )
     say = params.result.get("say", "")
@@ -234,18 +229,17 @@ async def main() -> int:
     for junk in ["", "quatsch", "25:00", "16:99", "halb vier"]:
         check(f"refuses {junk!r} rather than guessing", store.parse_spoken_time(junk) is None)
 
-    free = store.free_slots()[0]
+    free = tools._describe_slot(store.free_slots()[0])
     params = FakeParams(session)
     await tools.book_appointment(
         params,
         name="Elif Kaya",
         phone="+49170444",
-        day=free["date"],
-        time="sechzehn Uhr" if free["time"] == "16:00" else free["time"],
+        slot_id=free["slot_id"],
         location="Harburg",
     )
     check(
-        "books from a spoken time",
+        "books from an offered id",
         params.result.get("booked") is True,
         str(params.result.get("say"))[:40],
     )
@@ -255,15 +249,13 @@ async def main() -> int:
         params,
         name="Gul Demir",
         phone="+49170555",
-        day=free["date"],
-        time="irgendwann",
+        slot_id="not-a-real-slot-id",
         location="Harburg",
     )
     check(
-        "unclear time asks again, not 'slot taken'",
-        params.result.get("booked") is False
-        and "Uhrzeit war unklar" in params.result.get("say", ""),
-        params.result.get("say", ""),
+        "a bogus id is refused, with alternatives rather than a wrong booking",
+        params.result.get("booked") is False and bool(params.result.get("alternatives")),
+        params.result.get("say", "")[:56],
     )
 
     print("\n8bb. Preflight catches a retired model before a call does")
@@ -310,10 +302,81 @@ async def main() -> int:
         f"{len(store.transcript_for(t1))} / {len(store.transcript_for(t2))}",
     )
 
+    print("\n8e. Dates in BOTH languages the bot speaks")
+    # The bot switches to English mid-call and the model then passes English
+    # weekday names. A German-only parser answered "I do not understand the
+    # day", the model relayed that as "not available", and the caller spent two
+    # minutes guessing times that were never the problem.
+    for spoken, expect_parsed in [
+        ("Dienstag", True),
+        ("Tuesday", True),
+        ("Monday", True),
+        ("Friday", True),
+        ("friday", True),
+        ("morgen", True),
+        ("tomorrow", True),
+        ("2026-09-21", True),
+        ("nonsense", False),
+    ]:
+        got = store.parse_spoken_date(spoken)
+        check(f"parses {spoken!r}", (got is not None) == expect_parsed, str(got))
+
+    check(
+        "German and English name the same day",
+        store.parse_spoken_date("Dienstag") == store.parse_spoken_date("Tuesday"),
+    )
+
+    print("\n8f. An unreadable day offers slots instead of dead-ending")
+    params = FakeParams(session)
+    await tools.check_available_appointments(params, day="whenever-ish")
+    check(
+        "still offers real slots",
+        bool(params.result.get("slots")),
+        f"{len(params.result.get('slots', []))} offered",
+    )
+    check(
+        "never asks the caller to guess again",
+        "nicht verstanden" not in params.result.get("say", ""),
+        params.result.get("say", "")[:56],
+    )
+
+    print("\n8g. Slots carry an id, so the model never does time arithmetic")
+    params = FakeParams(session)
+    await tools.check_available_appointments(params)
+    offered = params.result["slots"]
+    check("every slot has an id", all("slot_id" in s_ for s_ in offered))
+    check(
+        "both languages precomputed",
+        all("say_german" in s_ and "say_english" in s_ for s_ in offered),
+    )
+    check(
+        "English time is correct, not model arithmetic",
+        all(
+            ("4 p.m." in s_["say_english"] and "16 Uhr" in s_["say_german"])
+            or "16 Uhr" not in s_["say_german"]
+            for s_ in offered
+        ),
+        offered[0]["say_english"] if offered else "",
+    )
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Ida Roth",
+        phone="+49170777",
+        slot_id="2026-09-22T15:00",
+        location="Barmbek",
+    )
+    check("refuses an id it never offered", params.result.get("booked") is False)
+
     print("\n8d. Speaking rules the first real call broke")
     prompt_text = system_prompt()
     for label, marker in [
-        ("caps answer length in words", "hoechstens 25 Woerter"),
+        ("caps answer length in words", "hoechstens 30 Woerter"),
+        ("says the cap is a ceiling, not a target", "Obergrenze, kein Ziel"),
+        ("handles small talk without re-asking", "nur plaudert"),
+        ("forbids the same question twice", "NIE zweimal hintereinander"),
+        ("bans a repeated opening word", "demselben Wort"),
+        ("never invents appointment times", "nie selbst Uhrzeiten ausdenken"),
         ("shows a too-long answer as the bad example", "dreizehn Sekunden"),
         ("forbids reading out lists", "Keine Listen vorlesen"),
         ("one question per turn", "Nur eine Frage pro Antwort"),
