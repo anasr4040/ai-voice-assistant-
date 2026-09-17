@@ -169,6 +169,17 @@ tests/test_tools.py         every action, offline, no API keys
 docs/FRAGEBOGEN.md          fill-in sheet for the owner
 ```
 
+## One command before any demo
+
+```sh
+uv run python scripts/check.py
+```
+
+Stage 1 needs no API keys and costs nothing — it runs all three suites and
+proves the code is sound. Stage 2 runs only if you have a `.env`, and tests
+your keys against the live APIs without placing a call or synthesising a word.
+It exits non-zero and tells you to stop if anything fails.
+
 ## Testing without spending money
 
 ```sh
