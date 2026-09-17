@@ -280,6 +280,57 @@ async def check_twilio(session: aiohttp.ClientSession) -> None:
         )
 
 
+async def check_email(session: aiohttp.ClientSession) -> None:
+    """Whether captured leads will actually reach a human."""
+    recipient = os.getenv("NOTIFY_EMAIL")
+    resend_key = os.getenv("RESEND_API_KEY")
+
+    if not recipient:
+        report(WARN, "Lead email", "NOTIFY_EMAIL unset -- leads only on /office")
+        return
+
+    if resend_key:
+        async with session.get(
+            "https://api.resend.com/domains",
+            headers={"Authorization": f"Bearer {resend_key}"},
+        ) as response:
+            if response.status not in (200, 201):
+                report(BAD, "Resend", f"key rejected ({response.status})")
+                return
+            domains = (await response.json()).get("data") or []
+
+        sender = os.getenv("RESEND_FROM", "onboarding@resend.dev")
+        verified = [d.get("name") for d in domains if d.get("status") == "verified"]
+        if sender.endswith("@resend.dev"):
+            report(
+                WARN,
+                "Resend",
+                f"key valid, sending as {sender} -- the shared test sender only "
+                f"delivers to your own Resend account address. Fine for testing; "
+                f"verify a domain to email anyone else.",
+            )
+        elif verified and sender.split("@")[-1] in verified:
+            report(OK, "Resend", f"key valid, sending as {sender}")
+        else:
+            report(
+                BAD,
+                "Resend",
+                f"RESEND_FROM={sender} is not on a verified domain. "
+                f"Verified: {', '.join(verified) or 'none'}",
+            )
+        return
+
+    if os.getenv("SMTP_HOST"):
+        report(OK, "Email", f"SMTP configured, leads go to {recipient}")
+    else:
+        report(
+            WARN,
+            "Email",
+            f"no RESEND_API_KEY and no SMTP_HOST -- leads reach {recipient} nowhere. "
+            "Resend is the simpler path.",
+        )
+
+
 def check_config() -> None:
     unknown = [name for name in config.LOCATIONS if not config.LOCATIONS[name]["address"]]
     if unknown:
@@ -297,13 +348,6 @@ def check_config() -> None:
         "Transfer number",
         config.TRANSFER_NUMBER or "unset -- 'put me through' becomes a callback",
     )
-    report(
-        OK if os.getenv("NOTIFY_EMAIL") else WARN,
-        "Lead email",
-        os.getenv("NOTIFY_EMAIL") or "unset -- leads only on /office, not emailed",
-    )
-    if os.getenv("NOTIFY_EMAIL") and not os.getenv("SMTP_HOST"):
-        report(WARN, "SMTP", "NOTIFY_EMAIL set but no SMTP_HOST -- nothing will send")
 
 
 async def main() -> int:
@@ -318,6 +362,7 @@ async def main() -> int:
             check_llm(session),
             check_tts(session),
             check_twilio(session),
+            check_email(session),
         )
     check_config()
 
