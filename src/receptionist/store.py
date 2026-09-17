@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 CREATE TABLE IF NOT EXISTS calls (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    call_sid    TEXT UNIQUE,
+    call_sid    TEXT,
     caller_id   TEXT,
     started_at  TEXT NOT NULL,
     ended_at    TEXT,
@@ -64,8 +64,12 @@ CREATE TABLE IF NOT EXISTS transcripts (
 def connect():
     """Yield a row-dict connection, committing on clean exit."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # timeout: two calls finishing at once otherwise raise "database is locked"
+    # instead of waiting. WAL: lets the dashboard read while a call writes.
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         yield conn
         conn.commit()
@@ -128,21 +132,29 @@ def add_booking(**fields: Any) -> int | None:
         return None
 
 
-def start_call(call_sid: str | None, caller_id: str | None) -> None:
-    """Record that a call the office would otherwise have missed was answered."""
+def start_call(call_sid: str | None, caller_id: str | None) -> int:
+    """Record an answered call. Returns its row id, which identifies it later.
+
+    Browser sessions have no call_sid, so the row id -- not the sid -- is what
+    end_call addresses. Matching on a NULL sid would update every browser call
+    ever made.
+    """
     with connect() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO calls (call_sid, caller_id, started_at) VALUES (?, ?, ?)",
+        cur = conn.execute(
+            "INSERT INTO calls (call_sid, caller_id, started_at) VALUES (?, ?, ?)",
             (call_sid, caller_id, config.now().isoformat(timespec="seconds")),
         )
+        return cur.lastrowid
 
 
-def end_call(call_sid: str | None, outcome: str) -> None:
-    """Close out a call with what it achieved, for the capture-rate figure."""
+def end_call(call_id: int | None, outcome: str) -> None:
+    """Close out one call with what it achieved, for the capture-rate figure."""
+    if call_id is None:
+        return
     with connect() as conn:
         conn.execute(
-            "UPDATE calls SET ended_at = ?, outcome = ? WHERE call_sid IS ?",
-            (config.now().isoformat(timespec="seconds"), outcome, call_sid),
+            "UPDATE calls SET ended_at = ?, outcome = ? WHERE id = ?",
+            (config.now().isoformat(timespec="seconds"), outcome, call_id),
         )
 
 

@@ -13,6 +13,7 @@ Run it::
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 
@@ -33,7 +34,7 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
-from receptionist import config, prompts, store, telephony
+from receptionist import prompts, store, telephony
 from receptionist.tools import TOOLS, CallSession
 
 load_dotenv(override=True)
@@ -41,6 +42,12 @@ load_dotenv(override=True)
 # Telephony is 8 kHz mu-law end to end; the browser demo can afford 16 kHz.
 TELEPHONY_SAMPLE_RATE = 8000
 WEB_SAMPLE_RATE = 16000
+
+# Hard ceiling on one call. Pipecat already hangs up after 300s of SILENCE, but
+# nothing stops a call that keeps producing audio -- a stuck line, a radio left
+# on, a caller who will not stop. Every one of those minutes bills speech-to-text
+# and text-to-speech, so cap it. 0 disables.
+MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "600"))
 
 
 def build_stt():
@@ -149,6 +156,17 @@ def _save_transcript(context: LLMContext, session: CallSession) -> None:
             store.add_transcript_line(session.call_sid, role, content.strip())
 
 
+async def _end_call_after(seconds: int, runner: WorkerRunner, session: CallSession) -> None:
+    """Hang up a call that has run too long, so a stuck line cannot drain credit."""
+    try:
+        await asyncio.sleep(seconds)
+    except asyncio.CancelledError:
+        return  # Normal: the call ended on its own first.
+    logger.warning(f"Call exceeded {seconds}s -- ending it to cap cost.")
+    session.note(f"Automatisch beendet nach {seconds // 60} Minuten")
+    await runner.cancel()
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, session: CallSession):
     """Wire the pipeline and run one call to completion."""
     stt, llm, tts = build_stt(), build_llm(prompts.system_prompt()), build_tts()
@@ -189,22 +207,35 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint, force_gc=True)
     await runner.add_workers(worker)
 
+    watchdog: asyncio.Task | None = None
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
+        nonlocal watchdog
         logger.info(f"Caller connected (call_sid={session.call_sid}, from={session.caller_id})")
-        store.start_call(session.call_sid, session.caller_id)
+        session.call_id = store.start_call(session.call_sid, session.caller_id)
+        if MAX_CALL_SECONDS > 0:
+            watchdog = asyncio.create_task(_end_call_after(MAX_CALL_SECONDS, runner, session))
         context.add_message({"role": "developer", "content": prompts.GREETING_INSTRUCTION})
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
+        if watchdog:
+            watchdog.cancel()
         outcome = "; ".join(session.captured)
         logger.info(f"Call ended. Outcome: {outcome or 'no contact details captured'}")
-        store.end_call(session.call_sid, outcome)
+        store.end_call(session.call_id, outcome)
         _save_transcript(context, session)
         await runner.cancel()
 
-    await runner.run()
+    try:
+        await runner.run()
+    finally:
+        # Also covers the paths that never fire on_client_disconnected, so the
+        # timer cannot outlive the call it was guarding.
+        if watchdog and not watchdog.done():
+            watchdog.cancel()
 
 
 async def bot(runner_args: RunnerArguments):

@@ -53,7 +53,14 @@ Preissperre nicht.
 
 | | |
 |---|---|
-| „Wann ist der Theorieunterricht?" | Weiß es nicht (haben wir nie ausgefüllt) → Rückruf. Nennt **nicht** die Bürozeiten als Unterrichtszeiten. |
+| „Wann ist der Theorieunterricht?" | Weiß es nicht → Rückruf. Nennt **nicht** die Bürozeiten als Unterrichtszeiten. Nennt sie „Montag und Mittwoch 18 Uhr", ist das ein Fehler — das war erfundener Platzhalter. |
+
+## 5b. Führerscheinklasse
+
+| | |
+|---|---|
+| „Bilden Sie Klasse B aus?" | Ja, klar. (Bestätigt.) |
+| „Und Klasse A, Motorrad?" | Erklärt, was Klasse A ist, sagt aber **nicht** zu, dass Infinity sie ausbildet → ein Kollege bestätigt das, Rückruf. |
 
 ## 6. Termin buchen
 

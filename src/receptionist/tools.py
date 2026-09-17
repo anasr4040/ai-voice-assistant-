@@ -26,6 +26,9 @@ class CallSession:
 
     call_sid: str | None = None
     caller_id: str | None = None
+    # Row id from store.start_call. Identifies THIS call even when there is no
+    # call_sid, as in the browser demo.
+    call_id: int | None = None
     transferring: bool = False
     captured: list[str] = field(default_factory=list)
 

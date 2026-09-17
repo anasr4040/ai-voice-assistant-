@@ -42,7 +42,7 @@ fly secrets set \
   ELEVENLABS_VOICE_ID=... \
   TWILIO_ACCOUNT_SID=... \
   TWILIO_AUTH_TOKEN=... \
-  TRANSFER_NUMBER="+4940644217 00" \
+  TRANSFER_NUMBER=+494064421700 \
   DASHBOARD_TOKEN=...
 
 fly deploy
@@ -53,6 +53,15 @@ Then check it came up:
 ```sh
 curl https://fahrschule-infinity-receptionist.fly.dev/status
 ```
+
+Two env vars in `fly.toml` decide whether phone calls work at all, and both
+fail quietly:
+
+- **`TRANSPORT = "twilio"`** mounts the telephony webhook. Without it `POST /`
+  returns 405 and every call fails — while the browser demo carries on working,
+  so it looks fine until someone dials.
+- **`PUBLIC_HOSTNAME`** is what the runner tells Twilio to open the WebSocket
+  on. Wrong or missing, and calls connect to silence.
 
 **If you rename the app or add a custom domain, update `PUBLIC_HOSTNAME` in
 `fly.toml`.** The runner uses it to tell Twilio where to open the WebSocket; if

@@ -23,6 +23,10 @@ primary_region = "fra"
   # Must match the hostname Twilio dials. Change it if you rename the app or
   # attach a custom domain, or the runner hands Twilio a URL it cannot reach.
   PUBLIC_HOSTNAME = "fahrschule-infinity-receptionist.fly.dev"
+  # Without this the runner never mounts the telephony webhook and every
+  # incoming call gets 405 from POST /. The browser demo keeps working either
+  # way, so the failure only shows up on a real call.
+  TRANSPORT = "twilio"
 
 # Captured leads and bookings. Without this volume every redeploy wipes them.
 [mounts]

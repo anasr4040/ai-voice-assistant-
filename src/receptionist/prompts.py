@@ -11,7 +11,40 @@ from receptionist import config
 
 
 def _classes_block() -> str:
-    return "\n".join(f"- Klasse {key}: {text}" for key, text in config.LICENCE_CLASSES.items())
+    """Classes we teach, and classes we can only explain.
+
+    Saying "yes we do that" about a class the school does not teach sends
+    someone across Hamburg for nothing, so the two lists are kept apart.
+    """
+    lines = ["Diese Klassen bilden wir sicher aus:"]
+    lines += [f"- Klasse {k}: {v}" for k, v in config.confirmed_classes().items()]
+
+    unconfirmed = config.unconfirmed_classes()
+    if unconfirmed:
+        lines.append("")
+        lines.append(
+            "Bei diesen Klassen weisst du NICHT, ob Infinity sie anbietet. Du darfst "
+            "erklaeren, was die Klasse ist, aber sage nie zu, dass wir sie ausbilden. "
+            "Sage, dass das ein Kollege bestaetigt, und nimm einen Rueckruf auf:"
+        )
+        lines += [f"- Klasse {k}: {v}" for k, v in unconfirmed.items()]
+    return "\n".join(lines)
+
+
+def _theory_line() -> str:
+    """Theory times, or an admission that we do not know them.
+
+    Opening hours are not lesson times; a caller who turns up at the wrong
+    hour has been actively misled, so an unconfirmed schedule is stated as
+    unknown rather than guessed from the office hours above.
+    """
+    if config.THEORY_CONFIRMED and config.THEORY["schedule"]:
+        return f"{config.THEORY['schedule']}. {config.THEORY['note']}".strip()
+    return (
+        "Die genauen Unterrichtszeiten kennst du NICHT. Nenne dafuer niemals die "
+        "Oeffnungszeiten des Bueros, das sind nicht dieselben Zeiten. Sage, dass "
+        "ein Kollege die Zeiten durchgibt, und nimm einen Rueckruf auf."
+    )
 
 
 def _prices_block() -> str:
@@ -95,7 +128,7 @@ Termin, eine Adresse oder eine Anfahrt geht. Bei allgemeinen Fragen zu Preisen
 oder Klassen brauchst du die Filiale nicht.
 Heute ist {config.today_name()}, der {now:%d.%m.%Y}, es ist {now:%H:%M} Uhr. {open_now}
 Oeffnungszeiten: {config.hours_sentence()}.
-Theorieunterricht: {config.THEORY["schedule"]}. {config.THEORY["note"]}
+Theorieunterricht: {_theory_line()}
 Pflichtstoff: {config.THEORY["lessons_required"]}.
 
 Fuehrerscheinklassen:

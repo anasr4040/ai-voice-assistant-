@@ -16,8 +16,24 @@ needed.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+
+def normalize_phone(raw: str) -> str:
+    """Strip a human-written number down to E.164, e.g. '+49 40 644 217 00'
+    -> '+494064421700'.
+
+    Twilio's <Dial> and REST API reject anything else, and the failure is a
+    dropped call rather than an error, so every number we dial goes through
+    this.
+    """
+    digits = re.sub(r"[^\d+]", "", raw or "")
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]
+    return digits
+
 
 TIMEZONE = ZoneInfo("Europe/Berlin")
 
@@ -108,26 +124,56 @@ WEEKDAY_NAMES = [
 
 # --- Theory lessons -------------------------------------------------------
 
+# Set True once the owner confirms the times. While False the bot says it does
+# not know and takes a callback, exactly as it does for prices.
+THEORY_CONFIRMED = False
+
 THEORY = {
-    "schedule": "Montag und Mittwoch, jeweils 18:00 bis 19:30 Uhr",
-    "lessons_required": "14 Doppelstunden Grundstoff plus 2 Doppelstunden Zusatzstoff fuer Klasse B",
-    "note": "Quereinstieg jederzeit moeglich, man muss nicht auf einen neuen Kurs warten.",
+    "schedule": "",  # TODO(owner): which days and times?
+    # Legally mandated for Klasse B nationwide, not school-specific, so safe
+    # to state regardless of the flag above.
+    "lessons_required": (
+        "14 Doppelstunden Grundstoff plus 2 Doppelstunden Zusatzstoff fuer Klasse B"
+    ),
+    "note": "",  # TODO(owner): is joining mid-course possible?
 }
 
 # --- Licence classes ------------------------------------------------------
 # `key` is what the LLM matches on. Keep descriptions short: they get spoken.
 
+# `confirmed` means: we have evidence Infinity actually teaches this class.
+# The descriptions are facts about German licence classes generally and are
+# true whatever the school offers -- it is the "we offer it" claim that needs
+# evidence, so an unconfirmed class gets a callback instead of a yes.
+#
+# Public sources mention B and BF17 explicitly, and motorcycle classes "at one
+# location" without saying which. Everything else here is an assumption.
 LICENCE_CLASSES = {
-    "B": "Normaler Autofuehrerschein, Schaltwagen und Automatik.",
-    "B197": "Ausbildung auf Automatik, Pruefung auf Automatik, danach darf man trotzdem Schaltwagen fahren.",
-    "BF17": "Begleitetes Fahren ab 17, Fuehrerschein mit 17 mit einer Begleitperson.",
-    "BE": "Klasse B mit groesserem Anhaenger.",
-    "B96": "Aufbauseminar fuer schwerere Anhaenger, keine eigene Pruefung.",
-    "AM": "Roller und Mofa ab 15 Jahren.",
-    "A1": "Leichtkraftrad bis 125 Kubikzentimeter, ab 16.",
-    "A2": "Mittlere Motorraeder, ab 18.",
-    "A": "Alle Motorraeder, ab 24 oder ab 20 mit zwei Jahren A2.",
+    "B": ("Normaler Autofuehrerschein, Schaltwagen und Automatik.", True),
+    "BF17": ("Begleitetes Fahren ab 17, Fuehrerschein mit 17 mit einer Begleitperson.", True),
+    "B197": (
+        "Ausbildung auf Automatik, Pruefung auf Automatik, danach darf man "
+        "trotzdem Schaltwagen fahren.",
+        False,
+    ),
+    "BE": ("Klasse B mit groesserem Anhaenger.", False),
+    "B96": ("Aufbauseminar fuer schwerere Anhaenger, keine eigene Pruefung.", False),
+    "AM": ("Roller und Mofa ab 15 Jahren.", False),
+    "A1": ("Leichtkraftrad bis 125 Kubikzentimeter, ab 16.", False),
+    "A2": ("Mittlere Motorraeder, ab 18.", False),
+    "A": ("Alle Motorraeder, ab 24 oder ab 20 mit zwei Jahren A2.", False),
 }
+
+
+def confirmed_classes() -> dict[str, str]:
+    """Classes we can tell a caller we teach."""
+    return {k: v[0] for k, v in LICENCE_CLASSES.items() if v[1]}
+
+
+def unconfirmed_classes() -> dict[str, str]:
+    """Classes we can explain but must not promise."""
+    return {k: v[0] for k, v in LICENCE_CLASSES.items() if not v[1]}
+
 
 # --- Prices ---------------------------------------------------------------
 # TODO(owner): every one of these is a guess. Replace before the demo.
@@ -194,7 +240,7 @@ BOOKABLE = {
 # Careful: if the AI is answering *because* this number was busy, transferring
 # back to it just bounces the caller. The bot therefore only offers a transfer
 # when the caller explicitly asks for a human.
-TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "+49 40 64421700")
+TRANSFER_NUMBER = normalize_phone(os.getenv("TRANSFER_NUMBER", "+49 40 64421700"))
 
 # Topics the bot must never improvise on -> take a callback request instead.
 ESCALATE_TOPICS = [
@@ -230,9 +276,16 @@ def is_open(at: datetime | None = None) -> bool:
 
 
 def speak_time(hhmm: str) -> str:
-    """'15:00' -> '15 Uhr', '18:30' -> '18 Uhr 30'. TTS reads these correctly."""
-    hour, minute = hhmm.split(":")
-    return f"{int(hour)} Uhr" if minute == "00" else f"{int(hour)} Uhr {int(minute)}"
+    """'15:00' -> '15 Uhr', '18:30' -> '18 Uhr 30'. TTS reads these correctly.
+
+    Returns anything unparseable unchanged: this also renders the office
+    dashboard, and one odd row must not blank the whole page.
+    """
+    try:
+        hour, minute = hhmm.split(":")
+        return f"{int(hour)} Uhr" if minute == "00" else f"{int(hour)} Uhr {int(minute)}"
+    except (ValueError, AttributeError):
+        return str(hhmm)
 
 
 def hours_sentence() -> str:

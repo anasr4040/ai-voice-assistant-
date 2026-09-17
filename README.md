@@ -26,10 +26,30 @@ then lets them go.
 `/office` shows the number that matters: calls answered, and what share left
 contact details.
 
-## Setup (laptop)
+## Installing
+
+You do not install libraries one by one. The only prerequisites are:
+
+| | |
+|---|---|
+| **Python 3.11+** | `python3 --version` |
+| **uv** | `curl -LsSf https://astral.sh/uv/install.sh \| sh` (macOS/Linux) or `winget install astral-sh.uv` (Windows) |
+| **Linux only** | `sudo apt install libgomp1` — needed by onnxruntime, which runs the voice-activity model. macOS and Windows already have it. |
+
+Then one command installs everything, pinned by `uv.lock`:
 
 ```sh
 uv sync
+```
+
+That pulls Pipecat (with the Deepgram, Google, ElevenLabs, WebRTC and Twilio
+pieces), FastAPI, uvicorn and the rest — about 126 packages, ~860 MB. No
+`pip install` list to maintain: every command below is `uv run ...`, which uses
+that environment automatically.
+
+## Setup (laptop)
+
+```sh
 cp .env.example .env
 ```
 

@@ -16,7 +16,10 @@ from pathlib import Path
 os.environ["DB_PATH"] = str(Path(tempfile.mkdtemp()) / "test.db")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import re  # noqa: E402
+
 from receptionist import config, store, tools  # noqa: E402
+from receptionist.prompts import system_prompt  # noqa: E402
 from receptionist.tools import CallSession  # noqa: E402
 
 PASSED, FAILED, TODOS = [], [], []
@@ -168,7 +171,65 @@ async def main() -> int:
     check("tells the model to take a callback", "callback" in params.result.get("say", "").lower())
     config.TRANSFER_NUMBER = saved
 
-    print("\n8. Config sanity")
+    print("\n8. Regressions (each of these was a real bug)")
+
+    # end_call matched on call_sid; browser calls have none, so every past
+    # browser call got rewritten with the newest outcome.
+    a = store.start_call(None, "web1")
+    store.end_call(a, "Termin gebucht")
+    b = store.start_call(None, "web2")
+    store.end_call(b, "")
+    c = store.start_call(None, "web3")
+    store.end_call(c, "Rueckruf notiert")
+    stats = store.call_stats()
+    check(
+        "calls without a call_sid stay separate",
+        (stats["total"], stats["captured"]) == (3, 2),
+        f"total={stats['total']} captured={stats['captured']}",
+    )
+
+    # "+49 40 64421700" is not E.164; Twilio <Dial> drops the call.
+    check(
+        "transfer number is dialable E.164",
+        bool(re.fullmatch(r"\+[1-9]\d{1,14}", config.TRANSFER_NUMBER)),
+        config.TRANSFER_NUMBER,
+    )
+    check(
+        "normalize_phone strips spaces",
+        config.normalize_phone("+49 40 644 217 00") == "+494064421700",
+    )
+    check(
+        "normalize_phone handles 00 prefix",
+        config.normalize_phone("0049 40 64421700") == "+494064421700",
+    )
+
+    # A malformed time took down the whole office dashboard.
+    check("speak_time survives junk", config.speak_time("sechzehn Uhr") == "sechzehn Uhr")
+
+    print("\n9. The bot must not state things we never confirmed")
+    prompt = system_prompt()
+    check(
+        "does not assert theory lesson times",
+        "Montag und Mittwoch" not in prompt,
+        "invented schedule would be spoken as fact",
+    )
+    check("tells the model it does not know them", "Unterrichtszeiten kennst du NICHT" in prompt)
+    check(
+        "never offers office hours as lesson times",
+        "nicht dieselben Zeiten" in prompt,
+    )
+    check(
+        "only promises confirmed licence classes",
+        set(config.confirmed_classes()) == {"B", "BF17"},
+        ", ".join(config.confirmed_classes()),
+    )
+    check(
+        "explains unconfirmed classes without promising them",
+        "sage nie zu, dass wir sie ausbilden" in prompt,
+    )
+    check("still refuses to quote a price", "Preise NICHT" in prompt)
+
+    print("\n10. Config sanity")
     for day, times in config.BOOKABLE["slots"].items():
         hours = config.OPENING_HOURS.get(day)
         check(
@@ -189,6 +250,16 @@ async def main() -> int:
         "prices confirmed by owner",
         config.PRICES_CONFIRMED,
         "PRICES_CONFIRMED is False -- the bot refuses to quote any price",
+    )
+    todo(
+        "theory lesson times confirmed",
+        config.THEORY_CONFIRMED and bool(config.THEORY["schedule"]),
+        "THEORY_CONFIRMED is False -- the bot refuses to state lesson times",
+    )
+    todo(
+        "all licence classes confirmed",
+        not config.unconfirmed_classes(),
+        "unconfirmed: " + ", ".join(config.unconfirmed_classes()),
     )
 
     print(f"\n{'=' * 58}")
