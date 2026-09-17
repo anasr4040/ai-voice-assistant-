@@ -59,8 +59,15 @@ ID, a rejected key and placeholder prices before the owner dials.
 uv run bot.py
 ```
 
-Open <http://localhost:7860>, allow the microphone, talk to it in German.
-Office view: <http://localhost:7860/office>. No phone number needed.
+Open <http://localhost:7860>, allow the microphone, click **Connect**, and talk
+to it in German. Office view: <http://localhost:7860/office>. No phone number
+needed, nothing deployed.
+
+**[docs/TESTSKRIPT.md](docs/TESTSKRIPT.md)** is a twelve-step German script —
+what to say, what should happen — covering every capability including the ones
+that must *not* fire (inventing a street, quoting a price, pushing twice for a
+number). It doubles as the demo script for the owner call, and as a
+troubleshooting table when something sounds wrong.
 
 ## Put it on a real phone
 
