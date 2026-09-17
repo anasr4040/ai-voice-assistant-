@@ -266,6 +266,38 @@ async def main() -> int:
         params.result.get("say", ""),
     )
 
+    print("\n8bb. Preflight catches a retired model before a call does")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from preflight import BAD, OK, WARN, judge_google_model
+
+    listing = {
+        "models": [
+            {"name": "models/gemini-3.6-flash", "supportedGenerationMethods": ["generateContent"]},
+            {
+                "name": "models/gemini-3.5-flash-lite",
+                "supportedGenerationMethods": ["generateContent"],
+            },
+            {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+        ]
+    }
+    status, detail = judge_google_model("gemini-3.6-flash", listing)
+    check("accepts an available model", status == OK, detail)
+
+    status, detail = judge_google_model("gemini-2.5-flash", listing)
+    check("rejects a retired model", status == BAD, detail)
+    check(
+        "names a usable replacement",
+        "gemini-3.6-flash" in detail,
+        detail,
+    )
+    check(
+        "does not suggest an embedding model",
+        "embedding" not in detail,
+        detail,
+    )
+    status, _ = judge_google_model("anything", {"models": []})
+    check("warns rather than blocks when listing fails", status == WARN)
+
     print("\n8c. Transcripts stay separate per call")
     t1 = store.start_call(None, "+4900001")
     t2 = store.start_call(None, "+4900002")

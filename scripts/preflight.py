@@ -26,6 +26,32 @@ problems: list[str] = []
 warnings: list[str] = []
 
 
+def judge_google_model(wanted: str, payload: dict) -> tuple[str, str]:
+    """Decide whether the configured Gemini model is usable on this account.
+
+    A valid key says nothing about the model: Google retires model names for
+    new accounts, and the first sign of it used to be a 404 in the middle of a
+    call. Pure function so it can be tested without a key.
+
+    Returns a (status, detail) pair ready for report().
+    """
+    usable = [
+        m["name"].removeprefix("models/")
+        for m in payload.get("models", [])
+        if "generateContent" in (m.get("supportedGenerationMethods") or [])
+    ]
+    if not usable:
+        return WARN, f"key valid; could not list models to verify {wanted}"
+    if wanted in usable:
+        return OK, f"model={wanted} available on this account"
+
+    preferred = [m for m in usable if "flash" in m and "lite" not in m]
+    suggestion = ", ".join((preferred or usable)[:3])
+    return BAD, (
+        f"model {wanted} is NOT available to this account. Set LLM_MODEL to one of: {suggestion}"
+    )
+
+
 def report(status: str, label: str, detail: str = "") -> None:
     print(f"[{status}] {label}{f' -- {detail}' if detail else ''}")
     if status == BAD:
@@ -77,15 +103,16 @@ async def check_llm(session: aiohttp.ClientSession) -> None:
         if not key:
             report(BAD, "Google", "GOOGLE_API_KEY not set")
             return
+        wanted = os.getenv("LLM_MODEL", "gemini-3.6-flash")
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
         async with session.get(url) as response:
-            report(
-                OK if response.status == 200 else BAD,
-                "Google",
-                f"model={os.getenv('LLM_MODEL', 'gemini-2.5-flash')}"
-                if response.status == 200
-                else f"key rejected ({response.status})",
-            )
+            if response.status != 200:
+                report(BAD, "Google", f"key rejected ({response.status})")
+                return
+            payload = await response.json()
+
+        status, detail = judge_google_model(wanted, payload)
+        report(status, "Google", detail)
         return
 
     key = os.getenv("ANTHROPIC_API_KEY")
@@ -129,6 +156,25 @@ async def check_tts(session: aiohttp.ClientSession) -> None:
             report(BAD, "ElevenLabs voice", f"{chosen} is not on this account -- silent calls")
         else:
             report(OK, "ElevenLabs", f"voice {chosen} available")
+
+        # Model names get retired here too.
+        wanted_model = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+        async with session.get(
+            "https://api.elevenlabs.io/v1/models", headers={"xi-api-key": key}
+        ) as response:
+            if response.status != 200:
+                report(WARN, "ElevenLabs model", f"could not verify {wanted_model}")
+                return
+            models = [m.get("model_id") for m in await response.json()]
+        if wanted_model in models:
+            report(OK, "ElevenLabs model", wanted_model)
+        else:
+            usable = [m for m in models if m and "flash" in m] or [m for m in models if m]
+            report(
+                BAD,
+                "ElevenLabs model",
+                f"{wanted_model} unavailable. Try: {', '.join(usable[:3])}",
+            )
         return
 
     key = os.getenv("CARTESIA_API_KEY")

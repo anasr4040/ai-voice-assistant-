@@ -88,7 +88,7 @@ def build_llm(system_instruction: str):
         return GoogleLLMService(
             api_key=os.getenv("GOOGLE_API_KEY", ""),
             settings=GoogleLLMService.Settings(
-                model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
+                model=os.getenv("LLM_MODEL", "gemini-3.6-flash"),
                 system_instruction=system_instruction,
             ),
         )
