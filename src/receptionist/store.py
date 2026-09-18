@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     slot_date   TEXT NOT NULL,
     slot_time   TEXT NOT NULL,
     location    TEXT,
+    email       TEXT,
     topic       TEXT,
     UNIQUE (slot_date, slot_time)
 );
@@ -86,6 +87,8 @@ def init() -> None:
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
         if "location" not in columns:
             conn.execute("ALTER TABLE bookings ADD COLUMN location TEXT")
+        if "email" not in columns:
+            conn.execute("ALTER TABLE bookings ADD COLUMN email TEXT")
         # Transcripts moved from call_sid to call_id. They are a convenience,
         # not a business record, so an old table is replaced rather than
         # migrated.
@@ -123,8 +126,9 @@ def add_booking(**fields: Any) -> int | None:
         with connect() as conn:
             cur = conn.execute(
                 "INSERT INTO bookings"
-                " (created_at, call_sid, name, phone, slot_date, slot_time, location, topic)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " (created_at, call_sid, name, phone, slot_date, slot_time, location,"
+                " email, topic)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     config.now().isoformat(timespec="seconds"),
                     fields.get("call_sid"),
@@ -133,6 +137,7 @@ def add_booking(**fields: Any) -> int | None:
                     fields["slot_date"],
                     fields["slot_time"],
                     fields.get("location"),
+                    fields.get("email"),
                     fields.get("topic"),
                 ),
             )

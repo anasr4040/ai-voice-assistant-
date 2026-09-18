@@ -85,6 +85,7 @@ async def main() -> int:
         params,
         name="Anna Schmidt",
         phone="+4917612345678",
+        email="",
         slot_id=first["slot_id"],
         location="Barmbek",
     )
@@ -110,6 +111,7 @@ async def main() -> int:
         params,
         name="Ben Meier",
         phone="+49170000",
+        email="",
         slot_id=first["slot_id"],
         location="Barmbek",
     )
@@ -122,6 +124,7 @@ async def main() -> int:
         params,
         name="Carla Weiss",
         phone="+49170111",
+        email="",
         slot_id=first["slot_id"].replace("T16:00", "T03:00"),
         location="Barmbek",
     )
@@ -133,6 +136,7 @@ async def main() -> int:
         params,
         name="Emil Braun",
         phone="+49170222",
+        email="",
         slot_id=first["slot_id"],
         location="Altona",
     )
@@ -146,6 +150,7 @@ async def main() -> int:
         params,
         name="Fatima Yilmaz",
         phone="+49170333",
+        email="",
         slot_id=free["slot_id"],
         location="Billstedt",
     )
@@ -235,6 +240,7 @@ async def main() -> int:
         params,
         name="Elif Kaya",
         phone="+49170444",
+        email="",
         slot_id=free["slot_id"],
         location="Harburg",
     )
@@ -249,6 +255,7 @@ async def main() -> int:
         params,
         name="Gul Demir",
         phone="+49170555",
+        email="",
         slot_id="not-a-real-slot-id",
         location="Harburg",
     )
@@ -301,6 +308,97 @@ async def main() -> int:
         len(store.transcript_for(t1)) == 2 and len(store.transcript_for(t2)) == 1,
         f"{len(store.transcript_for(t1))} / {len(store.transcript_for(t2))}",
     )
+
+    print("\n8i. Email confirmation for the caller")
+    for spoken, expected in [
+        ("anas punkt rabbani at gmail punkt com", "anas.rabbani@gmail.com"),
+        ("anas dot rabbani at gmail dot com", "anas.rabbani@gmail.com"),
+        ("max klammeraffe web punkt de", "max@web.de"),
+        ("ANAS at GMAIL dot COM", "anas@gmail.com"),
+    ]:
+        check(
+            f"reads {spoken!r}",
+            tools.normalize_spoken_email(spoken) == expected,
+            str(tools.normalize_spoken_email(spoken)),
+        )
+    for junk in ["", "uhh my email", "at gmail dot com", "anas rabbani at gmail com"]:
+        check(f"refuses {junk!r} rather than guessing", tools.normalize_spoken_email(junk) is None)
+
+    fresh = tools._describe_slot(store.free_slots()[0])
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Hanna Vogt",
+        phone="+49170888",
+        email="hanna punkt vogt at web punkt de",
+        slot_id=fresh["slot_id"],
+        location="Barmbek",
+    )
+    stored = [b for b in store.recent_bookings() if b["name"] == "Hanna Vogt"]
+    check(
+        "booking stores the normalised address",
+        bool(stored) and stored[0]["email"] == "hanna.vogt@web.de",
+        str(stored[0]["email"]) if stored else "no row",
+    )
+
+    fresh = tools._describe_slot(store.free_slots()[0])
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Jonas Feld",
+        phone="+49170999",
+        email="",
+        slot_id=fresh["slot_id"],
+        location="Barmbek",
+    )
+    check("declining an email still books", params.result.get("booked") is True)
+
+    fresh = tools._describe_slot(store.free_slots()[0])
+    params = FakeParams(session)
+    await tools.book_appointment(
+        params,
+        name="Klara Sonn",
+        phone="+49170111",
+        email="uhh my email",
+        slot_id=fresh["slot_id"],
+        location="Barmbek",
+    )
+    check(
+        "a garbled address never becomes a booking field",
+        [b for b in store.recent_bookings() if b["name"] == "Klara Sonn"][0]["email"] is None,
+    )
+    check(
+        "and the caller is told, not left waiting",
+        "nicht sicher verstanden" in params.result.get("say", ""),
+    )
+
+    print("\n8j. Behaving like a person, not a form")
+    prompt_text = system_prompt()
+    for label, marker in [
+        ("asks for an email for the confirmation", "E-Mail fuer die Terminbestaetigung"),
+        ("reads the address back", "zur Kontrolle zurueck"),
+        ("accepts a refusal without pushing", "Frage kein zweites Mal"),
+        ("admits when it misheard", "das habe ich nicht ganz verstanden"),
+        ("knows STT produces nonsense", "En dat scheet"),
+        ("fills a pause instead of going silent", "Einen Moment, ich schaue nach"),
+        ("remembers what the caller said earlier", "wir machen das in Ruhe"),
+    ]:
+        check(label, marker in prompt_text)
+
+    print("\n8h. Tone and language rules the third call broke")
+    prompt_text = system_prompt()
+    for label, marker in [
+        ("a single word never switches language", "Ein einzelnes Wort wechselt NIE"),
+        ("knows STT mangles short German as English", 'aus "ja" wird "yeah"'),
+        ("needs two full English sentences to switch", "zwei vollstaendige Saetze"),
+        ("falls back to the last full sentence", "zuletzt einen ganzen"),
+        ("answers vague questions instead of interrogating", "antworte, statt auszufragen"),
+        ("shows the interrogation as the bad example", "Verhoer"),
+        ("offers two options rather than an open question", "nenne zwei Moeglichkeiten"),
+        ("has a calm tone section", "nervoes oder spricht nicht gut Deutsch"),
+        ("reassures a caller apologising for their German", "wir sprechen langsam"),
+    ]:
+        check(label, marker in prompt_text)
 
     print("\n8e. Dates in BOTH languages the bot speaks")
     # The bot switches to English mid-call and the model then passes English
@@ -363,6 +461,7 @@ async def main() -> int:
         params,
         name="Ida Roth",
         phone="+49170777",
+        email="",
         slot_id="2026-09-22T15:00",
         location="Barmbek",
     )

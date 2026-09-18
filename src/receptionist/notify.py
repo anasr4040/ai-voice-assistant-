@@ -124,6 +124,53 @@ async def notify_lead(*, name: str, phone: str, topic: str, caller_id: str | Non
     )
 
 
+async def confirm_booking_to_caller(*, to_email: str, name: str, when: str, where: str) -> bool:
+    """Email the caller their own confirmation. Returns whether it was sent.
+
+    Separate from notify_booking, which tells the office. This one goes to a
+    stranger's address, which is exactly what Resend's shared test sender
+    refuses -- so a verified domain is required before this reaches anyone but
+    the account owner. It is best-effort either way: the appointment is already
+    booked, and a failed email must never unbook it.
+    """
+    if not (to_email and RESEND_API_KEY):
+        return False
+
+    body = (
+        f"Hallo {name},\n\n"
+        f"Ihr kostenloses Beratungsgespraech ist gebucht:\n\n"
+        f"    {when}\n"
+        f"    {where}\n\n"
+        f"Bitte bringen Sie einen Ausweis mit. Wenn der Termin doch nicht passt, "
+        f"rufen Sie uns kurz an unter {config.BUSINESS['phone']}.\n\n"
+        f"Bis bald,\n{config.BUSINESS['name']}\n"
+    )
+    payload = {
+        "from": f"{config.BUSINESS['name']} <{RESEND_FROM}>",
+        "to": [to_email.strip().lower()],
+        "subject": f"Ihr Termin bei {config.BUSINESS['name']}: {when}",
+        "text": body,
+    }
+    headers = {"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.post(RESEND_API_URL, json=payload, headers=headers) as response:
+                if response.status in (200, 201, 202):
+                    logger.info(f"Booking confirmation sent to {to_email}")
+                    return True
+                detail = (await response.text())[:300]
+                logger.error(f"Confirmation to {to_email} rejected ({response.status}): {detail}")
+                if response.status == 403 and RESEND_FROM.endswith("@resend.dev"):
+                    logger.error(
+                        "Resend's shared test sender cannot email a caller. Verify a domain "
+                        "at resend.com/domains and set RESEND_FROM to an address on it."
+                    )
+                return False
+    except Exception as exc:
+        logger.error(f"Could not send confirmation to {to_email}: {exc}")
+        return False
+
+
 async def notify_booking(
     *, name: str, phone: str, slot_date: str, slot_time: str, topic: str | None
 ) -> None:

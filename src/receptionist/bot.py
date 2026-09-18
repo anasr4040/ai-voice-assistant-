@@ -157,6 +157,17 @@ def build_tts():
                 model=os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
                 voice=os.getenv("ELEVENLABS_VOICE_ID", ""),
                 language="de",
+                # Default delivery is too quick and too bright for someone who
+                # is nervous about a driving licence and may not be a native
+                # speaker. Slower and steadier reads as calm rather than rushed.
+                # Range is 0.7 to 1.2; below about 0.85 starts to sound sedated.
+                speed=float(os.getenv("TTS_SPEED", "0.92")),
+                # Higher stability is a steadier, less theatrical read.
+                stability=float(os.getenv("TTS_STABILITY", "0.6")),
+                similarity_boost=float(os.getenv("TTS_SIMILARITY", "0.75")),
+                # Style is drama. A receptionist does not need any.
+                style=float(os.getenv("TTS_STYLE", "0.0")),
+                use_speaker_boost=True,
             ),
         )
 

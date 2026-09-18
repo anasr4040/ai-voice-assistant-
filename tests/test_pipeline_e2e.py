@@ -182,6 +182,7 @@ async def main() -> int:
                 "args": {
                     "name": "Ben Meier",
                     "phone": "+4915112345",
+                    "email": "ben punkt meier at web punkt de",
                     "slot_id": slot["slot_id"],
                     "location": "Barmbek",
                 },
@@ -196,6 +197,11 @@ async def main() -> int:
     if bookings:
         check("branch recorded", bookings[0]["location"] == "Barmbek", str(bookings[0]["location"]))
         check(
+            "spoken email normalised through the real dispatch",
+            bookings[0]["email"] == "ben.meier@web.de",
+            str(bookings[0]["email"]),
+        )
+        check(
             "slot matches the id that was offered",
             bookings[0]["slot_date"] in slot["slot_id"],
             slot["slot_id"],
@@ -209,6 +215,7 @@ async def main() -> int:
                 "args": {
                     "name": "Carla",
                     "phone": "+49170",
+                    "email": "",
                     "slot_id": slot["slot_id"],
                     "location": "Altona",  # not a real branch
                 },
