@@ -11,6 +11,7 @@ one second ago) without that logic leaking into the system prompt.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -48,6 +49,39 @@ _WEEKDAY_EN = {
     "Samstag": "Saturday",
     "Sonntag": "Sunday",
 }
+
+
+# Spoken email addresses arrive mangled. Speech-to-text writes "at" and "punkt"
+# as words, inserts spaces between every part, and never produces "@". These are
+# the spoken spellings that actually turn up, German and English.
+_EMAIL_AT = (" at ", " ät ", " aet ", " klammeraffe ", " atzeichen ")
+_EMAIL_DOT = (" dot ", " punkt ", " period ", " point ")
+
+
+def normalize_spoken_email(raw: str) -> str | None:
+    """Turn a dictated address into a real one, or None if it is not usable.
+
+    "anas punkt rabbani at gmail punkt com" -> "anas.rabbani@gmail.com"
+
+    Returning None matters as much as parsing: a confirmation sent to a
+    misheard address is worse than none, because the caller believes it is on
+    its way.
+    """
+    text = f" {(raw or '').strip().lower()} "
+    for word in _EMAIL_AT:
+        text = text.replace(word, "@")
+    for word in _EMAIL_DOT:
+        text = text.replace(word, ".")
+
+    # Speech-to-text spaces out the letters it spells; the address has none.
+    candidate = re.sub(r"\s+", "", text).strip(".,;:!?")
+    # Deepgram sometimes writes "gmail.com" as "gmail. com" -> already handled,
+    # and occasionally doubles a separator when the caller pauses.
+    candidate = re.sub(r"\.{2,}", ".", candidate).replace("@@", "@")
+
+    if not re.fullmatch(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", candidate):
+        return None
+    return candidate
 
 
 def _slot_id(slot: dict) -> str:
@@ -141,7 +175,7 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
 
 
 async def book_appointment(
-    params: FunctionCallParams, name: str, phone: str, slot_id: str, location: str
+    params: FunctionCallParams, name: str, phone: str, email: str, slot_id: str, location: str
 ) -> None:
     """Book a free consultation appointment at one branch of the driving school.
 
@@ -153,6 +187,8 @@ async def book_appointment(
     Args:
         name: The caller's full name as they said it.
         phone: The caller's phone number, digits only, with country code if given.
+        email: The caller's email address, for the written confirmation. Pass an
+            empty string if they do not want to give one -- never invent it.
         slot_id: A slot_id from check_available_appointments, copied exactly.
         location: Which branch the caller wants: Barmbek, Billstedt, Harburg or
             Langenhorn. Ask the caller if they have not said.
@@ -190,6 +226,10 @@ async def book_appointment(
         )
         return
 
+    # A misheard address is worse than none: the caller then waits for a
+    # confirmation that was never deliverable.
+    clean_email = normalize_spoken_email(email) if email else None
+
     booking_id = store.add_booking(
         call_sid=session.call_sid,
         name=name,
@@ -197,6 +237,7 @@ async def book_appointment(
         slot_date=match["date"],
         slot_time=match["time"],
         location=branch,
+        email=clean_email,
         topic="Beratungsgespraech",
     )
     if booking_id is None:
@@ -217,14 +258,37 @@ async def book_appointment(
     address = config.location_address(branch)
     described = _describe_slot(match)
     where = f"Filiale {branch}" + (f", {address}" if address else "")
+
+    confirmation_sent = False
+    if clean_email:
+        confirmation_sent = await notify.confirm_booking_to_caller(
+            to_email=clean_email, name=name, when=described["say_german"], where=where
+        )
+
+    if email and not clean_email:
+        # We heard something but could not make an address of it. Say so rather
+        # than let the caller expect an email that will never arrive.
+        email_line = (
+            "Die E-Mail-Adresse hast du nicht sicher verstanden. Sage, dass die "
+            "Bestaetigung nur muendlich erfolgt, und biete an, sie noch einmal "
+            "zu buchstabieren."
+        )
+    elif confirmation_sent:
+        email_line = f"Sage, dass die Bestaetigung gerade an {clean_email} unterwegs ist."
+    elif clean_email:
+        email_line = "Erwaehne die E-Mail nicht weiter."
+    else:
+        email_line = ""
     await params.result_callback(
         {
             "booked": True,
             "location": branch,
+            "email_confirmation_sent": confirmation_sent,
             "say": (
                 f"Bestaetige jetzt EINMAL, in einem Satz: {name}, "
                 f"{described['say_german']} (englisch: {described['say_english']}), {where}. "
                 + ("" if address else "Die genaue Adresse schickt ein Kollege per SMS nach. ")
+                + (f"{email_line} " if email_line else "")
                 + "Frage dann, ob du sonst noch helfen kannst."
             ),
         }
