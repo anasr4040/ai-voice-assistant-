@@ -144,6 +144,7 @@ and the AI only ever picks up calls that would have rung out.
 | Book appointments | Free consultation slots only. Validated against real availability; a `UNIQUE` constraint makes double-booking impossible |
 | Take callbacks | Name, number, topic → SQLite, email, `/office`. Auto-fills the caller's number from Twilio |
 | Transfer | Redirects the live call to `TRANSFER_NUMBER` — only when asked, never offered, since the office being busy is why the AI answered |
+| Follow the caller's language | Starts in German; follows into English, Turkish, Arabic, Russian, Ukrainian, Polish, Romanian, Spanish, French, Italian or Portuguese. Code decides the switch from Deepgram's per-word language tags (one stray "yeah" never counts) and moves the model **and** the voice together, so English is not read in a German accent |
 
 It deliberately **cannot** book individual driving lessons (instructor-dependent)
 and refuses to answer on MPU, refunds, complaints and licence transfers — those
@@ -156,7 +157,8 @@ bot.py                      entry point
 src/receptionist/
   config.py                 ← the file you edit: hours, prices, classes, slots
   prompts.py                system prompt, generated from config
-  tools.py                  the 4 actions the bot can take
+  tools.py                  the 5 actions the bot can take
+  language.py               which language the call is in, and switching it
   bot.py                    the voice pipeline
   store.py                  SQLite: calls, leads, bookings, transcripts
   notify.py                 email the office
@@ -185,6 +187,7 @@ It exits non-zero and tells you to stop if anything fails.
 ```sh
 uv run python tests/test_tools.py            # every action the bot can take
 uv run python tests/test_prompt_delivery.py  # the prompt reaches the model
+uv run python tests/test_language.py         # language switches, model and voice together
 uv run python tests/test_pipeline_e2e.py     # a whole call, end to end, free
 ```
 

@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS calls (
     caller_id   TEXT,
     started_at  TEXT NOT NULL,
     ended_at    TEXT,
-    outcome     TEXT
+    outcome     TEXT,
+    captured    INTEGER,
+    language    TEXT
 );
 CREATE TABLE IF NOT EXISTS transcripts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +91,14 @@ def init() -> None:
             conn.execute("ALTER TABLE bookings ADD COLUMN location TEXT")
         if "email" not in columns:
             conn.execute("ALTER TABLE bookings ADD COLUMN email TEXT")
+        # `captured` separates "left a booking or number" from anything else
+        # worth logging, such as a technical error, which used to count as a
+        # success because the outcome text was merely non-empty.
+        call_columns = {r["name"] for r in conn.execute("PRAGMA table_info(calls)")}
+        if "captured" not in call_columns:
+            conn.execute("ALTER TABLE calls ADD COLUMN captured INTEGER")
+        if "language" not in call_columns:
+            conn.execute("ALTER TABLE calls ADD COLUMN language TEXT")
         # Transcripts moved from call_sid to call_id. They are a convenience,
         # not a business record, so an old table is replaced rather than
         # migrated.
@@ -162,14 +172,26 @@ def start_call(call_sid: str | None, caller_id: str | None) -> int:
         return cur.lastrowid
 
 
-def end_call(call_id: int | None, outcome: str) -> None:
-    """Close out one call with what it achieved, for the capture-rate figure."""
+def end_call(
+    call_id: int | None,
+    outcome: str,
+    captured: bool | None = None,
+    language: str | None = None,
+) -> None:
+    """Close out one call with what it achieved, for the capture-rate figure.
+
+    `captured` defaults to "the outcome says something", which is what older
+    callers meant; pass it explicitly when the outcome also carries notes that
+    are not a capture, such as a technical error.
+    """
     if call_id is None:
         return
+    if captured is None:
+        captured = bool(outcome)
     with connect() as conn:
         conn.execute(
-            "UPDATE calls SET ended_at = ?, outcome = ? WHERE id = ?",
-            (config.now().isoformat(timespec="seconds"), outcome, call_id),
+            "UPDATE calls SET ended_at = ?, outcome = ?, captured = ?, language = ? WHERE id = ?",
+            (config.now().isoformat(timespec="seconds"), outcome, int(captured), language, call_id),
         )
 
 
@@ -182,7 +204,9 @@ def call_stats() -> dict:
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) AS n FROM calls").fetchone()["n"]
         captured = conn.execute(
-            "SELECT COUNT(*) AS n FROM calls WHERE outcome IS NOT NULL AND outcome != ''"
+            "SELECT COUNT(*) AS n FROM calls WHERE captured = 1"
+            # Rows written before the column existed: fall back to the old rule.
+            " OR (captured IS NULL AND outcome IS NOT NULL AND outcome != '')"
         ).fetchone()["n"]
     return {
         "total": total,

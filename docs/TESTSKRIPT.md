@@ -95,17 +95,23 @@ besetzt, deshalb ist sie überhaupt am Apparat.
 |---|---|
 | „Ich habe eine Frage zur MPU." | Antwortet nicht selbst. Rückruf. |
 
-## 10. Englisch
+## 10. Sprachen
 
 | | |
 |---|---|
-| „Sorry, do you speak English?" | Wechselt **komplett** ins Englische und bleibt dort. Kein Mischen im Satz. |
+| „Sorry, do you speak English?" | Wechselt **komplett** ins Englische und bleibt dort. Die **Stimme** klingt jetzt englisch, nicht wie Deutsch mit Akzent. Uhrzeiten: „four p.m.", nie „sixteen o'clock". |
+| Danach auf Englisch nur „Okay." oder „Yes." | Bleibt Englisch. Ein Wort wechselt nie. |
+| Neuer Anruf. Auf Deutsch antworten, einmal nur „Yeah." | Bleibt Deutsch. |
+| Neuer Anruf. „Merhaba, Türkçe konuşabilir miyiz?" | Wechselt ins Türkische, Stimme und Sprache zusammen. Filialnamen bleiben deutsch. |
+| „Können wir Niederländisch sprechen?" | Sagt freundlich, dass sie das nicht spricht, und bietet Deutsch oder Englisch an. |
 
 ## 11. Unterbrechen
 
 | | |
 |---|---|
 | Mitten in einem langen Satz laut dazwischenreden | Hört sofort auf zu sprechen und geht darauf ein. Redet sie weiter, ist die Unterbrechungserkennung kaputt. |
+| Während sie spricht, nur „mhm" oder „ja" sagen | Spricht **weiter**. So zeigt man am Telefon, dass man zuhört. Bricht sie ab, `INTERRUPT_MIN_WORDS` erhöhen. |
+| Nach ihrer Frage 10 Sekunden schweigen | Fragt kurz, ob Sie noch da sind. Nach zweimal Nachfragen verabschiedet sie sich und legt auf. |
 
 ## 12. Auflegen ohne Daten — der eigentliche Zweck
 
@@ -134,3 +140,5 @@ Anruf ohne Kontaktdaten wäre sonst spurlos verloren gewesen.
 | Versteht Deutsch schlecht | `STT_LANGUAGE=multi` braucht `DEEPGRAM_MODEL=nova-3`. |
 | Nennt Preise | Sperre greift nicht — bitte melden. |
 | Antwortet sehr langsam | Kostenloses Gemini-Kontingent gedrosselt. Auf `LLM_PROVIDER=openai` wechseln. |
+| Englisch klingt deutsch | Sprachwechsel kommt nicht an der Stimme an → `uv run python tests/test_language.py` |
+| Wechselt nach einem einzelnen Wort die Sprache | Bitte melden, mit Transkript aus `/office`. Schwellen: `STRONG_WORDS` in `language.py`. |
