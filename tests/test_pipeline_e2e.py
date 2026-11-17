@@ -126,13 +126,14 @@ async def main() -> int:
     check("model was actually called", len(fake.requests) >= 1, f"{len(fake.requests)} request(s)")
     offered = fake.tools_offered()
     check(
-        "all four tools were advertised",
+        "all five tools were advertised",
         set(offered)
         == {
             "check_available_appointments",
             "book_appointment",
             "take_callback_request",
             "transfer_to_staff",
+            "switch_language",
         },
         ", ".join(sorted(offered)),
     )

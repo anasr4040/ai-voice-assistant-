@@ -115,13 +115,23 @@ async def notify(subject: str, body: str) -> None:
 async def notify_lead(*, name: str, phone: str, topic: str, caller_id: str | None) -> None:
     """Tell the office someone wants a callback."""
     await notify(
-        f"Rueckruf gewuenscht: {name}",
+        f"Rückruf gewünscht: {name}",
         f"Name:     {name}\n"
         f"Telefon:  {phone}\n"
         f"Anliegen: {topic}\n"
         f"Anrufer-Nummer laut Netz: {caller_id or 'unbekannt'}\n"
         f"Eingegangen: {config.now():%d.%m.%Y %H:%M} Uhr",
     )
+
+
+def can_email_callers() -> bool:
+    """Whether a confirmation to a caller's own address can actually be sent.
+
+    Resend's shared test sender only delivers to the account owner, so with it
+    a caller would be promised an email that is refused. Checked up front, so
+    the bot only says "the confirmation is on its way" when it can be.
+    """
+    return bool(RESEND_API_KEY) and not RESEND_FROM.endswith("@resend.dev")
 
 
 async def confirm_booking_to_caller(*, to_email: str, name: str, when: str, where: str) -> bool:
@@ -138,7 +148,7 @@ async def confirm_booking_to_caller(*, to_email: str, name: str, when: str, wher
 
     body = (
         f"Hallo {name},\n\n"
-        f"Ihr kostenloses Beratungsgespraech ist gebucht:\n\n"
+        f"Ihr kostenloses Beratungsgespräch ist gebucht:\n\n"
         f"    {when}\n"
         f"    {where}\n\n"
         f"Bitte bringen Sie einen Ausweis mit. Wenn der Termin doch nicht passt, "

@@ -59,11 +59,11 @@ BUSINESS = {
 # callback rather than guessing a street.
 LOCATIONS = {
     "Barmbek": {
-        "address": "Bramfelder Strasse 95, 22305 Hamburg",
+        "address": "Bramfelder Straße 95, 22305 Hamburg",
         "note": "",
     },
     "Harburg": {
-        "address": "Hannoversche Strasse 86, 21079 Hamburg",
+        "address": "Hannoversche Straße 86, 21079 Hamburg",
         "note": "im Untergeschoss des Phoenix-Centers",
     },
     # TODO(owner): street address missing. Until it is filled in, the bot names
@@ -133,7 +133,7 @@ THEORY = {
     # Legally mandated for Klasse B nationwide, not school-specific, so safe
     # to state regardless of the flag above.
     "lessons_required": (
-        "14 Doppelstunden Grundstoff plus 2 Doppelstunden Zusatzstoff fuer Klasse B"
+        "14 Doppelstunden Grundstoff plus 2 Doppelstunden Zusatzstoff für Klasse B"
     ),
     "note": "",  # TODO(owner): is joining mid-course possible?
 }
@@ -149,19 +149,19 @@ THEORY = {
 # Public sources mention B and BF17 explicitly, and motorcycle classes "at one
 # location" without saying which. Everything else here is an assumption.
 LICENCE_CLASSES = {
-    "B": ("Normaler Autofuehrerschein, Schaltwagen und Automatik.", True),
-    "BF17": ("Begleitetes Fahren ab 17, Fuehrerschein mit 17 mit einer Begleitperson.", True),
+    "B": ("Normaler Autoführerschein, Schaltwagen und Automatik.", True),
+    "BF17": ("Begleitetes Fahren ab 17, Führerschein mit 17 mit einer Begleitperson.", True),
     "B197": (
-        "Ausbildung auf Automatik, Pruefung auf Automatik, danach darf man "
+        "Ausbildung auf Automatik, Prüfung auf Automatik, danach darf man "
         "trotzdem Schaltwagen fahren.",
         False,
     ),
-    "BE": ("Klasse B mit groesserem Anhaenger.", False),
-    "B96": ("Aufbauseminar fuer schwerere Anhaenger, keine eigene Pruefung.", False),
+    "BE": ("Klasse B mit größerem Anhänger.", False),
+    "B96": ("Aufbauseminar für schwerere Anhänger, keine eigene Prüfung.", False),
     "AM": ("Roller und Mofa ab 15 Jahren.", False),
     "A1": ("Leichtkraftrad bis 125 Kubikzentimeter, ab 16.", False),
-    "A2": ("Mittlere Motorraeder, ab 18.", False),
-    "A": ("Alle Motorraeder, ab 24 oder ab 20 mit zwei Jahren A2.", False),
+    "A2": ("Mittlere Motorräder, ab 18.", False),
+    "A": ("Alle Motorräder, ab 24 oder ab 20 mit zwei Jahren A2.", False),
 }
 
 
@@ -183,7 +183,7 @@ def unconfirmed_classes() -> dict[str, str]:
 # While it is False the bot states no price at all and offers a callback.
 #
 # Why this is not simply filled in from the website: public sources disagree.
-# One listing gives an Anmeldegebuehr of 395 Euro "statt 595", the school's own
+# One listing gives an Anmeldegebühr of 395 Euro "statt 595", the school's own
 # social post gives 295 Euro "statt 595" for the Langenhorn opening. Those are
 # rotating promotions that differ by branch and by month. A receptionist that
 # quotes last quarter's offer costs more trust than one that says "das sagt
@@ -193,13 +193,13 @@ PRICES_CONFIRMED = False
 # Found publicly, NOT confirmed. Correct these, then flip the flag above.
 # Written the way they should be SPOKEN, not the way they are printed.
 PRICES = {
-    "grundbetrag": "",  # web: 395 Euro Anmeldegebuehr, statt 595 (promotion, unconfirmed)
+    "grundbetrag": "",  # web: 395 Euro Anmeldegebühr, statt 595 (promotion, unconfirmed)
     "fahrstunde": "",  # web: 65 Euro pro Fahrstunde (unconfirmed)
     "sonderfahrt": "",  # unknown
     "vorstellung_praktisch": "",  # unknown
     "vorstellung_theorie": "",  # unknown
     "note": (
-        "Dazu kommen die amtlichen Gebuehren von TUEV oder DEKRA und vom "
+        "Dazu kommen die amtlichen Gebühren von TÜV oder DEKRA und vom "
         f"{BUSINESS['authority']}, die zahlt man direkt dort. "
         "Wie viele Fahrstunden jemand braucht ist sehr individuell, "
         "deshalb nennen wir am Telefon keinen Gesamtpreis."
@@ -213,7 +213,7 @@ REQUIREMENTS = [
     "Erste-Hilfe-Kurs mit 9 Unterrichtseinheiten",
     "ein biometrisches Passfoto",
     "Personalausweis oder Reisepass",
-    f"den Antrag beim {BUSINESS['authority']}, dabei helfen wir im Buero",
+    f"den Antrag beim {BUSINESS['authority']}, dabei helfen wir im Büro",
 ]
 
 # --- Appointment booking --------------------------------------------------
@@ -221,7 +221,7 @@ REQUIREMENTS = [
 # Only free-consultation slots are bookable by phone. Driving lessons are
 # deliberately NOT bookable: they depend on instructor availability.
 BOOKABLE = {
-    "type": "kostenloses Beratungsgespraech im Buero",
+    "type": "kostenloses Beratungsgespräch im Büro",
     "duration_minutes": 30,
     # Slots offered, per weekday. Must fall inside OPENING_HOURS.
     "slots": {
@@ -244,11 +244,11 @@ TRANSFER_NUMBER = normalize_phone(os.getenv("TRANSFER_NUMBER", "+49 40 64421700"
 
 # Topics the bot must never improvise on -> take a callback request instead.
 ESCALATE_TOPICS = [
-    "Beschwerden oder Aerger mit einem Fahrlehrer",
-    "Rueckerstattungen, Mahnungen oder Vertragsaufloesung",
-    "MPU, Fuehrerscheinentzug oder Punkte in Flensburg",
-    "Umschreibung eines auslaendischen Fuehrerscheins",
-    "verbindliche Zusagen zu Pruefungsterminen",
+    "Beschwerden oder Ärger mit einem Fahrlehrer",
+    "Rückerstattungen, Mahnungen oder Vertragsauflösung",
+    "MPU, Führerscheinentzug oder Punkte in Flensburg",
+    "Umschreibung eines ausländischen Führerscheins",
+    "verbindliche Zusagen zu Prüfungsterminen",
 ]
 
 

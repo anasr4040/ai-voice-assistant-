@@ -20,7 +20,7 @@ import sys
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import EndWorkerFrame, LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -32,9 +32,12 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from pipecat.turns.user_start import MinWordsUserTurnStartStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from receptionist import prompts, store, telephony
+from receptionist import config, prompts, store, telephony
+from receptionist.language import LanguageSwitcher, phrase
 from receptionist.tools import TOOLS, CallSession
 
 load_dotenv(override=True)
@@ -49,6 +52,43 @@ WEB_SAMPLE_RATE = 16000
 # and text-to-speech, so cap it. 0 disables.
 MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "600"))
 
+# Words the caller must say before the bot stops talking. At 1, every "mhm",
+# "ja" or cough cut the bot off mid-sentence -- the single most robotic thing a
+# phone bot does, because people make those noises to show they ARE listening.
+# When the bot is silent, one word is still enough to start the caller's turn.
+INTERRUPT_MIN_WORDS = int(os.getenv("INTERRUPT_MIN_WORDS", "2"))
+
+# Seconds of silence after the bot finishes before it checks the caller is
+# still there. Twice it asks; the third time it says goodbye and hangs up, so
+# a dropped call does not sit open billing by the minute. 0 disables.
+USER_IDLE_SECONDS = float(os.getenv("USER_IDLE_SECONDS", "10"))
+IDLE_PROMPTS_BEFORE_HANGUP = 2
+
+# A technical error is announced at most this often. More than that and the
+# caller hears the same apology on a loop while nothing else happens.
+MAX_FALLBACK_LINES = 2
+
+
+def stt_keyterms() -> list[str]:
+    """Words speech-to-text should expect: our names, branches, licence classes.
+
+    Proper names are where phone-quality speech-to-text slips most: a branch
+    that arrives as "Bambeck" or "Bill Stadt" cannot be matched to a booking.
+    """
+    terms = [config.BUSINESS["name"], config.ASSISTANT_NAME, *config.LOCATIONS]
+    terms += [f"Klasse {k}" for k in config.LICENCE_CLASSES]
+    terms += [
+        "Führerschein",
+        "Beratungsgespräch",
+        "Fahrstunde",
+        "Theorieunterricht",
+        "Erste-Hilfe-Kurs",
+        "Sehtest",
+        "Begleitetes Fahren",
+        "Landesbetrieb Verkehr",
+    ]
+    return terms
+
 
 def build_stt():
     """Deepgram, configured for a German caller who may switch to English.
@@ -59,6 +99,7 @@ def build_stt():
     """
     from pipecat.services.deepgram.stt import DeepgramSTTService
 
+    use_keyterms = os.getenv("STT_KEYTERMS", "1") != "0"
     return DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY", ""),
         settings=DeepgramSTTService.Settings(
@@ -66,6 +107,9 @@ def build_stt():
             language=os.getenv("STT_LANGUAGE", "multi"),
             smart_format=True,
             punctuate=True,
+            # Keyterm prompting is a nova-3 feature; set STT_KEYTERMS=0 if you
+            # switch to a model that rejects it.
+            keyterm=stt_keyterms() if use_keyterms else None,
         ),
     )
 
@@ -82,6 +126,12 @@ def build_llm(system_instruction: str):
     """
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
+    # Lower is steadier: the same question gets the same answer, and the model
+    # strays less from the script. Opt-in, because reasoning models (the gpt-5
+    # family, for one) reject the parameter outright.
+    raw_temperature = os.getenv("LLM_TEMPERATURE", "").strip()
+    temperature = float(raw_temperature) if raw_temperature else None
+
     if provider == "google":
         from pipecat.services.google.llm import GoogleLLMService
 
@@ -90,6 +140,7 @@ def build_llm(system_instruction: str):
             settings=GoogleLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "gemini-3.6-flash"),
                 system_instruction=system_instruction,
+                **({"temperature": temperature} if temperature is not None else {}),
             ),
         )
 
@@ -104,6 +155,7 @@ def build_llm(system_instruction: str):
             settings=GrokLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "grok-4.20-non-reasoning"),
                 system_instruction=system_instruction,
+                **({"temperature": temperature} if temperature is not None else {}),
             ),
         )
 
@@ -115,6 +167,7 @@ def build_llm(system_instruction: str):
             settings=AnthropicLLMService.Settings(
                 model=os.getenv("LLM_MODEL", "claude-haiku-4-5"),
                 system_instruction=system_instruction,
+                **({"temperature": temperature} if temperature is not None else {}),
             ),
         )
 
@@ -136,15 +189,19 @@ def build_llm(system_instruction: str):
         settings=OpenAILLMService.Settings(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             system_instruction=system_instruction,
+            **({"temperature": temperature} if temperature is not None else {}),
         ),
     )
 
 
-def build_tts():
+def build_tts(language: str = "de"):
     """The voice. This is what the owner will actually judge, so make it easy
     to A/B two providers on the same call flow.
 
     TTS_PROVIDER: cartesia (default, cheaper) | elevenlabs (more natural German)
+
+    `language` is only the starting point: receptionist.language switches it
+    mid-call together with the model, so English is pronounced as English.
     """
     provider = os.getenv("TTS_PROVIDER", "cartesia").lower()
 
@@ -156,7 +213,7 @@ def build_tts():
             settings=ElevenLabsTTSService.Settings(
                 model=os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
                 voice=os.getenv("ELEVENLABS_VOICE_ID", ""),
-                language="de",
+                language=language,
                 # Default delivery is too quick and too bright for someone who
                 # is nervous about a driving licence and may not be a native
                 # speaker. Slower and steadier reads as calm rather than rushed.
@@ -178,7 +235,7 @@ def build_tts():
         settings=CartesiaTTSService.Settings(
             model=os.getenv("CARTESIA_MODEL", "sonic-2"),
             voice=os.getenv("CARTESIA_VOICE_ID", ""),
-            language="de",
+            language=language,
         ),
     )
 
@@ -199,24 +256,39 @@ async def _end_call_after(seconds: int, runner: WorkerRunner, session: CallSessi
     except asyncio.CancelledError:
         return  # Normal: the call ended on its own first.
     logger.warning(f"Call exceeded {seconds}s -- ending it to cap cost.")
-    session.note(f"Automatisch beendet nach {seconds // 60} Minuten")
+    session.event(f"Automatisch beendet nach {seconds // 60} Minuten")
     await runner.cancel()
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, session: CallSession):
     """Wire the pipeline and run one call to completion."""
-    stt, llm, tts = build_stt(), build_llm(prompts.system_prompt()), build_tts()
+    language = session.language.current
+    stt = build_stt()
+    llm = build_llm(prompts.system_prompt(language))
+    tts = build_tts(language)
 
     context = LLMContext(tools=TOOLS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            # Only the start strategy changes; the stop side keeps Pipecat's
+            # default Smart Turn model, which waits out a caller pausing
+            # mid-sentence ("my number is ... zero one seven two ...").
+            user_turn_strategies=UserTurnStrategies(
+                start=[MinWordsUserTurnStartStrategy(min_words=INTERRUPT_MIN_WORDS)]
+            ),
+            user_idle_timeout=USER_IDLE_SECONDS,
+        ),
     )
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            # Right after speech-to-text: decides the call's language and moves
+            # the model and the voice before they handle what was just said.
+            LanguageSwitcher(session.language),
             user_aggregator,
             llm,
             tts,
@@ -244,6 +316,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
     await runner.add_workers(worker)
 
     watchdog: asyncio.Task | None = None
+    idle_prompts = 0
+    fallback_lines = 0
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -261,18 +335,74 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
     @worker.event_handler("on_pipeline_error")
     async def on_pipeline_error(worker, frame):
         # A rate limit, an outage or a timeout otherwise reaches the caller as
-        # dead air, and people hang up on silence.
+        # dead air, and people hang up on silence. Fixed text, in the call's
+        # language, because the model may be exactly what just failed.
+        nonlocal fallback_lines
         logger.error(f"Pipeline error: {frame.error}")
-        session.note("Technischer Fehler im Gespraech")
-        await worker.queue_frames([TTSSpeakFrame(prompts.FALLBACK_LINE)])
+        session.event("Technischer Fehler im Gespräch")
+        if fallback_lines < MAX_FALLBACK_LINES:
+            fallback_lines += 1
+            await worker.queue_frames([TTSSpeakFrame(phrase("fallback", session.language.current))])
+
+    @user_aggregator.event_handler("on_user_turn_started")
+    async def on_user_turn_started(aggregator, strategy):
+        nonlocal idle_prompts
+        idle_prompts = 0
+
+    @user_aggregator.event_handler("on_user_turn_idle")
+    async def on_user_turn_idle(aggregator):
+        # A person on the phone does not sit in silence forever, and does not
+        # hang up the moment the other side goes quiet either. Check in --
+        # worded by the model, so it is in the right language and fits what
+        # was just said -- and only give up after that has not worked twice.
+        nonlocal idle_prompts
+        if session.transferring:
+            return
+        idle_prompts += 1
+        if idle_prompts > IDLE_PROMPTS_BEFORE_HANGUP:
+            session.event("Aufgelegt nach Stille")
+            await worker.queue_frames(
+                [
+                    TTSSpeakFrame(phrase("goodbye_idle", session.language.current)),
+                    EndWorkerFrame(),
+                ]
+            )
+            return
+        hint = (
+            "Kurz und freundlich fragen, ob der Anrufer noch da ist."
+            if idle_prompts == 1
+            else "Sagen, dass er sich ruhig Zeit lassen kann, du bist noch da."
+        )
+        await worker.queue_frames(
+            [
+                LLMMessagesAppendFrame(
+                    messages=[
+                        {
+                            "role": "developer",
+                            "content": (
+                                f"(Hinweis vom System: Der Anrufer sagt seit "
+                                f"{int(USER_IDLE_SECONDS)} Sekunden nichts. {hint} "
+                                "Ein Satz, in der Sprache des Gesprächs.)"
+                            ),
+                        }
+                    ],
+                    run_llm=True,
+                )
+            ]
+        )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         if watchdog:
             watchdog.cancel()
-        outcome = "; ".join(session.captured)
+        outcome = session.outcome
         logger.info(f"Call ended. Outcome: {outcome or 'no contact details captured'}")
-        store.end_call(session.call_id, outcome)
+        store.end_call(
+            session.call_id,
+            outcome,
+            captured=bool(session.captured),
+            language=session.language.current,
+        )
         _save_transcript(context, session)
         await runner.cancel()
 

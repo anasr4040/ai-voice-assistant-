@@ -50,7 +50,7 @@ class FakeParams:
         self.llm = self
         self.frames: list = []
 
-    async def result_callback(self, result):
+    async def result_callback(self, result, **kwargs):
         self.result = result
 
     async def push_frame(self, frame):
@@ -156,8 +156,14 @@ async def main() -> int:
     )
     say = params.result.get("say", "")
     check("books without a known street", params.result.get("booked") is True)
-    check("never invents a street", "strasse" not in say.lower().replace("hannoversche", ""))
-    check("promises the address follows", "SMS" in say)
+    check(
+        "never invents a street",
+        not any(s in say.lower() for s in ("strasse", "straße")),
+    )
+    check("promises a colleague gives the address", "durchgibt" in say)
+    # There is no SMS sending anywhere in this code base. Promising one meant
+    # the caller waited for a text that could never arrive.
+    check("never promises an SMS it cannot send", "SMS" not in say)
 
     print("\n6. Caller wants a callback")
     params = FakeParams(session)
@@ -179,6 +185,41 @@ async def main() -> int:
     check("tells the model to take a callback", "callback" in params.result.get("say", "").lower())
     config.TRANSFER_NUMBER = saved
 
+    print("\n7b. Transfer on a real call, in the caller's language")
+    saved_transfer, saved_wait = tools.telephony.transfer_call, tools.TRANSFER_SPEAK_SECONDS
+    tools.TRANSFER_SPEAK_SECONDS = 0
+    for twilio_accepts in (True, False):
+
+        async def fake_transfer(call_sid, to_number, say_first="", _ok=twilio_accepts):
+            return _ok
+
+        tools.telephony.transfer_call = fake_transfer
+        english_caller = CallSession(call_sid="CA123", caller_id="+4917612345678")
+        english_caller.language.choose("en")
+        params = FakeParams(english_caller)
+        params.kwargs = {}
+
+        async def capture(result, **kwargs):
+            params.result, params.kwargs = result, kwargs
+
+        params.result_callback = capture
+        await tools.transfer_to_staff(params, reason="Möchte jemanden sprechen")
+        spoken = [f.text for f in params.frames if hasattr(f, "text")]
+        props = params.kwargs.get("properties")
+        if twilio_accepts:
+            check("announces the transfer in English", "putting you through" in " ".join(spoken))
+            check(
+                "the model does not talk over the announcement",
+                props is not None and props.run_llm is False,
+            )
+            check("a completed transfer counts as captured", bool(english_caller.captured))
+        else:
+            check(
+                "a failed transfer says so in English", "nobody is picking up" in " ".join(spoken)
+            )
+            check("a failed transfer is not counted as captured", not english_caller.captured)
+    tools.telephony.transfer_call, tools.TRANSFER_SPEAK_SECONDS = saved_transfer, saved_wait
+
     print("\n8. Regressions (each of these was a real bug)")
 
     # end_call matched on call_sid; browser calls have none, so every past
@@ -188,13 +229,28 @@ async def main() -> int:
     b = store.start_call(None, "web2")
     store.end_call(b, "")
     c = store.start_call(None, "web3")
-    store.end_call(c, "Rueckruf notiert")
+    store.end_call(c, "Rückruf notiert")
     stats = store.call_stats()
     check(
         "calls without a call_sid stay separate",
         (stats["total"], stats["captured"]) == (3, 2),
         f"total={stats['total']} captured={stats['captured']}",
     )
+
+    # A call that only had a technical error used to count as captured, since
+    # its outcome text was non-empty. That inflated the one number the owner
+    # looks at.
+    errored = CallSession()
+    errored.event("Technischer Fehler im Gespräch")
+    d = store.start_call(None, None)
+    store.end_call(d, errored.outcome, captured=bool(errored.captured))
+    stats = store.call_stats()
+    check(
+        "an error alone is not a captured call",
+        (stats["total"], stats["captured"]) == (4, 2),
+        f"total={stats['total']} captured={stats['captured']}",
+    )
+    check("but the error is still on record", "Technischer Fehler" in errored.outcome)
 
     # "+49 40 64421700" is not E.164; Twilio <Dial> drops the call.
     check(
@@ -375,8 +431,8 @@ async def main() -> int:
     print("\n8j. Behaving like a person, not a form")
     prompt_text = system_prompt()
     for label, marker in [
-        ("asks for an email for the confirmation", "E-Mail fuer die Terminbestaetigung"),
-        ("reads the address back", "zur Kontrolle zurueck"),
+        ("asks for an email for the confirmation", "E-Mail für die Terminbestätigung"),
+        ("reads the address back", "zur Kontrolle zurück"),
         ("accepts a refusal without pushing", "Frage kein zweites Mal"),
         ("admits when it misheard", "das habe ich nicht ganz verstanden"),
         ("knows STT produces nonsense", "En dat scheet"),
@@ -390,12 +446,12 @@ async def main() -> int:
     for label, marker in [
         ("a single word never switches language", "Ein einzelnes Wort wechselt NIE"),
         ("knows STT mangles short German as English", 'aus "ja" wird "yeah"'),
-        ("needs two full English sentences to switch", "zwei vollstaendige Saetze"),
-        ("falls back to the last full sentence", "zuletzt einen ganzen"),
+        ("is told the language instead of guessing it", "Die Sprache stellt das System"),
+        ("switches on explicit request via the tool", "switch_language"),
         ("answers vague questions instead of interrogating", "antworte, statt auszufragen"),
-        ("shows the interrogation as the bad example", "Verhoer"),
-        ("offers two options rather than an open question", "nenne zwei Moeglichkeiten"),
-        ("has a calm tone section", "nervoes oder spricht nicht gut Deutsch"),
+        ("shows the interrogation as the bad example", "Verhör"),
+        ("offers two options rather than an open question", "nenne zwei Möglichkeiten"),
+        ("has a calm tone section", "nervös oder spricht nicht gut Deutsch"),
         ("reassures a caller apologising for their German", "wir sprechen langsam"),
     ]:
         check(label, marker in prompt_text)
@@ -470,7 +526,7 @@ async def main() -> int:
     print("\n8d. Speaking rules the first real call broke")
     prompt_text = system_prompt()
     for label, marker in [
-        ("caps answer length in words", "hoechstens 30 Woerter"),
+        ("caps answer length in words", "höchstens 30 Wörter"),
         ("says the cap is a ceiling, not a target", "Obergrenze, kein Ziel"),
         ("handles small talk without re-asking", "nur plaudert"),
         ("forbids the same question twice", "NIE zweimal hintereinander"),
@@ -479,8 +535,8 @@ async def main() -> int:
         ("shows a too-long answer as the bad example", "dreizehn Sekunden"),
         ("forbids reading out lists", "Keine Listen vorlesen"),
         ("one question per turn", "Nur eine Frage pro Antwort"),
-        ("forbids narrating its own next action", "Nicht ankuendigen"),
-        ("confirm details once, not repeatedly", "genau einmal bestaetigen"),
+        ("forbids narrating its own next action", "Nicht ankündigen"),
+        ("confirm details once, not repeatedly", "genau einmal bestätigen"),
         ("bans 'sixteen o'clock' in English", "sixteen o'clock"),
         ("gives the English time form", "four p.m."),
         ("stops asserting what the caller wants", "Stelle nicht fest, was der Anrufer will"),

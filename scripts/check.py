@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FREE_SUITES = [
     ("Actions the bot can take", "tests/test_tools.py"),
     ("System prompt reaches the model", "tests/test_prompt_delivery.py"),
+    ("Language switching, model and voice together", "tests/test_language.py"),
     ("A whole call, end to end", "tests/test_pipeline_e2e.py"),
 ]
 

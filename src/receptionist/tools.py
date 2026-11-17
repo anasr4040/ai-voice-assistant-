@@ -1,4 +1,4 @@
-"""The four things the receptionist can actually DO, beyond answering questions.
+"""The things the receptionist can actually DO, beyond answering questions.
 
 These are Pipecat "direct functions": the signature and the Google-style
 docstring below ARE the schema the LLM sees, so the docstrings are prompt text
@@ -11,14 +11,37 @@ one second ago) without that logic leaking into the system prompt.
 
 from __future__ import annotations
 
+import asyncio
 import re
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 
 from loguru import logger
-from pipecat.frames.frames import EndWorkerFrame, TTSSpeakFrame
+from pipecat.frames.frames import EndWorkerFrame, FunctionCallResultProperties, TTSSpeakFrame
 from pipecat.services.llm_service import FunctionCallParams
 
 from receptionist import config, notify, store, telephony
+from receptionist.language import SUPPORTED, LanguagePolicy, phrase, resolve, switch_frames
+
+# Seconds to let "one moment, I'm putting you through" play before Twilio takes
+# the call away from us. Redirecting at once cut the sentence off mid-word.
+TRANSFER_SPEAK_SECONDS = 3.0
+
+# Strong references to fire-and-forget tasks; asyncio only keeps weak ones.
+_background: set[asyncio.Task] = set()
+
+
+def _in_background(job: Awaitable) -> None:
+    """Run a notification without making the caller wait for it.
+
+    Emails used to be sent before the tool returned, so the caller sat in
+    silence for a second or two after every booking -- up to thirty when the
+    mail server was slow. The row is already in SQLite before this runs, so
+    nothing is lost if delivery fails; notify logs the failure itself.
+    """
+    task = asyncio.ensure_future(job)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
 
 @dataclass
@@ -31,12 +54,26 @@ class CallSession:
     # call_sid, as in the browser demo.
     call_id: int | None = None
     transferring: bool = False
+    # Bookings, callbacks, transfers: what makes the call a success.
     captured: list[str] = field(default_factory=list)
+    # Anything else worth reading later -- errors, timeouts. Not a success.
+    events: list[str] = field(default_factory=list)
+    language: LanguagePolicy = field(default_factory=LanguagePolicy)
 
     def note(self, what: str) -> None:
-        """Record an outcome so the end-of-call log says what the call achieved."""
+        """Record a capture: the call achieved something the office can act on."""
         self.captured.append(what)
         logger.info(f"[call {self.call_sid or 'web'}] {what}")
+
+    def event(self, what: str) -> None:
+        """Record something that happened, without counting it as a success."""
+        self.events.append(what)
+        logger.info(f"[call {self.call_sid or 'web'}] {what}")
+
+    @property
+    def outcome(self) -> str:
+        """Everything that happened, captures first, for the calls table."""
+        return "; ".join(self.captured + self.events)
 
 
 # Weekday names for the English side of the call, so the model never translates.
@@ -107,12 +144,11 @@ def _describe_slot(slot: dict) -> dict:
         "slot_id": _slot_id(slot),
         "say_german": f"{slot['weekday']} um {config.speak_time(slot['time'])}",
         "say_english": f"{_WEEKDAY_EN.get(slot['weekday'], slot['weekday'])} at {english_time}",
+        # For every other language: the model phrases these itself. 24-hour
+        # time is the norm in all of them, so there is no arithmetic to get wrong.
+        "date": slot["date"],
+        "time_24h": slot["time"],
     }
-
-
-def _speak_slot(slot: dict) -> str:
-    """One bookable slot, phrased for German speech."""
-    return f"{slot['weekday']} um {config.speak_time(slot['time'])}"
 
 
 async def check_available_appointments(params: FunctionCallParams, day: str = "") -> None:
@@ -122,9 +158,10 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
     Returns the next available slots.
 
     Args:
-        day: Optional. The day the caller asked for, exactly as they said it,
-            for example "Dienstag", "morgen" or "15.10.". Leave empty to get the
-            next available slots across all days.
+        day: Optional. The day the caller asked for, in German or English, for
+            example "Dienstag", "Tuesday", "morgen" or "15.10.". If the caller
+            spoke another language, translate the day into German first. Leave
+            empty to get the next available slots across all days.
     """
     slots = store.free_slots()
 
@@ -140,7 +177,7 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
                     "slots": [_describe_slot(s) for s in slots[:3]],
                     "say": (
                         "Den Tag hast du nicht sicher verstanden. Nenne einfach die "
-                        "naechsten freien Termine, wortwoertlich, und frage, welcher passt."
+                        "nächsten freien Termine, wortwörtlich, und frage, welcher passt."
                     ),
                 }
             )
@@ -151,7 +188,7 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
                 {
                     "available": False,
                     "requested_day": wanted,
-                    "alternatives": [_speak_slot(s) for s in slots[:3]],
+                    "alternatives": [_describe_slot(s) for s in slots[:3]],
                     "say": "An dem Tag ist leider nichts frei. Biete die Alternativen an.",
                 }
             )
@@ -164,11 +201,12 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
             "available": bool(offer),
             "slots": [_describe_slot(s) for s in offer],
             "say": (
-                "Nenne hoechstens zwei dieser Termine, wortwoertlich wie in say_german "
-                "oder say_english. Rechne Uhrzeiten NIE selbst um. Zum Buchen gibst du "
-                "die slot_id genau so zurueck, wie sie hier steht."
+                "Nenne höchstens zwei dieser Termine: auf Deutsch wortwörtlich "
+                "say_german, auf Englisch say_english, in jeder anderen Sprache "
+                "Wochentag und time_24h. Rechne Uhrzeiten NIE selbst um. Zum Buchen "
+                "gibst du die slot_id genau so zurück, wie sie hier steht."
                 if offer
-                else "In den naechsten zwei Wochen ist nichts frei. Biete einen Rueckruf an."
+                else "In den nächsten zwei Wochen ist nichts frei. Biete einen Rückruf an."
             ),
         }
     )
@@ -238,7 +276,7 @@ async def book_appointment(
         slot_time=match["time"],
         location=branch,
         email=clean_email,
-        topic="Beratungsgespraech",
+        topic="Beratungsgespräch",
     )
     if booking_id is None:
         await params.result_callback(
@@ -247,22 +285,28 @@ async def book_appointment(
         return
 
     session.note(f"Termin gebucht: {name}, {match['date']} {match['time']}, Filiale {branch}")
-    await notify.notify_booking(
-        name=name,
-        phone=phone or session.caller_id or "",
-        slot_date=match["date"],
-        slot_time=match["time"],
-        topic=f"Beratungsgespraech, Filiale {branch}",
-    )
 
     address = config.location_address(branch)
     described = _describe_slot(match)
     where = f"Filiale {branch}" + (f", {address}" if address else "")
 
-    confirmation_sent = False
-    if clean_email:
-        confirmation_sent = await notify.confirm_booking_to_caller(
-            to_email=clean_email, name=name, when=described["say_german"], where=where
+    _in_background(
+        notify.notify_booking(
+            name=name,
+            phone=phone or session.caller_id or "",
+            slot_date=match["date"],
+            slot_time=match["time"],
+            topic=f"Beratungsgespräch, Filiale {branch}"
+            + ("" if address else " -- Adresse der Filiale bitte noch durchgeben"),
+        )
+    )
+
+    confirmation_sent = bool(clean_email) and notify.can_email_callers()
+    if confirmation_sent:
+        _in_background(
+            notify.confirm_booking_to_caller(
+                to_email=clean_email, name=name, when=described["say_german"], where=where
+            )
         )
 
     if email and not clean_email:
@@ -270,13 +314,13 @@ async def book_appointment(
         # than let the caller expect an email that will never arrive.
         email_line = (
             "Die E-Mail-Adresse hast du nicht sicher verstanden. Sage, dass die "
-            "Bestaetigung nur muendlich erfolgt, und biete an, sie noch einmal "
+            "Bestätigung nur mündlich erfolgt, und biete an, sie noch einmal "
             "zu buchstabieren."
         )
     elif confirmation_sent:
-        email_line = f"Sage, dass die Bestaetigung gerade an {clean_email} unterwegs ist."
+        email_line = f"Sage, dass die Bestätigung gleich per E-Mail an {clean_email} kommt."
     elif clean_email:
-        email_line = "Erwaehne die E-Mail nicht weiter."
+        email_line = "Erwähne die E-Mail nicht weiter."
     else:
         email_line = ""
     await params.result_callback(
@@ -285,9 +329,9 @@ async def book_appointment(
             "location": branch,
             "email_confirmation_sent": confirmation_sent,
             "say": (
-                f"Bestaetige jetzt EINMAL, in einem Satz: {name}, "
+                f"Bestätige jetzt EINMAL, in einem Satz: {name}, "
                 f"{described['say_german']} (englisch: {described['say_english']}), {where}. "
-                + ("" if address else "Die genaue Adresse schickt ein Kollege per SMS nach. ")
+                + ("" if address else "Sage, dass ein Kollege die genaue Adresse noch durchgibt. ")
                 + (f"{email_line} " if email_line else "")
                 + "Frage dann, ob du sonst noch helfen kannst."
             ),
@@ -313,7 +357,7 @@ async def take_callback_request(
 
     if not number:
         await params.result_callback(
-            {"saved": False, "say": "Frage nach der Rueckrufnummer, sie fehlt noch."}
+            {"saved": False, "say": "Frage nach der Rückrufnummer, sie fehlt noch."}
         )
         return
 
@@ -324,14 +368,16 @@ async def take_callback_request(
         phone=number,
         topic=topic,
     )
-    session.note(f"Rueckruf notiert: {name} ({number}) -- {topic}")
-    await notify.notify_lead(name=name, phone=number, topic=topic, caller_id=session.caller_id)
+    session.note(f"Rückruf notiert: {name} ({number}) -- {topic}")
+    _in_background(
+        notify.notify_lead(name=name, phone=number, topic=topic, caller_id=session.caller_id)
+    )
 
-    when = "heute noch" if config.is_open() else "am naechsten Werktag"
+    when = "heute noch" if config.is_open() else "am nächsten Werktag"
     await params.result_callback(
         {
             "saved": True,
-            "say": f"Bestaetige kurz, dass sich ein Kollege {when} meldet, und frage, ob du sonst noch helfen kannst.",
+            "say": f"Bestätige kurz, dass sich ein Kollege {when} meldet, und frage, ob du sonst noch helfen kannst.",
         }
     )
 
@@ -354,7 +400,7 @@ async def transfer_to_staff(params: FunctionCallParams, reason: str) -> None:
             {
                 "transferred": False,
                 "say": (
-                    "Eine Weiterleitung ist gerade nicht moeglich. Entschuldige dich kurz, "
+                    "Eine Weiterleitung ist gerade nicht möglich. Entschuldige dich kurz, "
                     "und nimm mit take_callback_request Name und Nummer auf."
                 ),
             }
@@ -362,27 +408,78 @@ async def transfer_to_staff(params: FunctionCallParams, reason: str) -> None:
         return
 
     session.transferring = True
-    session.note(f"Weiterleitung an {config.TRANSFER_NUMBER}: {reason}")
-    await params.result_callback({"transferred": True, "say": ""})
-
-    # Said by us before the line is handed over -- after the redirect, Twilio owns
-    # the call and our pipeline is gone.
-    await params.llm.push_frame(TTSSpeakFrame("Einen Moment bitte, ich verbinde Sie."))
-
-    transferred = await telephony.transfer_call(
-        session.call_sid,
-        config.TRANSFER_NUMBER,
-        say_first="Sie werden jetzt verbunden.",
+    language = session.language.current
+    # run_llm=False: the next words are ours, below. Letting the model answer
+    # the result as well made it talk over "one moment, putting you through".
+    await params.result_callback(
+        {"transferred": True, "say": ""},
+        properties=FunctionCallResultProperties(run_llm=False),
     )
+
+    # Said by us before the line is handed over -- after the redirect, Twilio
+    # owns the call and our pipeline is gone, so give the sentence time to play.
+    await params.llm.push_frame(TTSSpeakFrame(phrase("connecting", language)))
+    await asyncio.sleep(TRANSFER_SPEAK_SECONDS)
+
+    transferred = await telephony.transfer_call(session.call_sid, config.TRANSFER_NUMBER)
     if transferred:
+        session.note(f"Weiterleitung an {config.TRANSFER_NUMBER}: {reason}")
         await params.llm.push_frame(EndWorkerFrame())
     else:
         session.transferring = False
-        await params.llm.push_frame(
-            TTSSpeakFrame(
-                "Es meldet sich leider niemand. Ich notiere Ihnen einen Rueckruf. Wie heissen Sie?"
-            )
+        session.event("Weiterleitung fehlgeschlagen")
+        await params.llm.push_frame(TTSSpeakFrame(phrase("transfer_failed", language)))
+
+
+async def switch_language(params: FunctionCallParams, language: str) -> None:
+    """Switch the conversation, and the voice, to another language.
+
+    Call this ONLY when the caller explicitly asks to speak another language,
+    for example "Can we speak English?", "Sprechen Sie Türkisch?" or "Türkçe
+    konuşabilir miyiz?". Never call it because of a single foreign word, and
+    never because you guess the caller might prefer it -- the system already
+    follows the language the caller speaks.
+
+    Args:
+        language: The language the caller asked for, as a two-letter code, for
+            example "en", "tr", "ar", "ru", "pl" or "de".
+    """
+    session: CallSession = params.app_resources
+    code = resolve(language)
+
+    if code is None:
+        await params.result_callback(
+            {
+                "switched": False,
+                "available": list(SUPPORTED.values()),
+                "say": (
+                    "Diese Sprache sprichst du leider nicht. Sage das freundlich, in der "
+                    "aktuellen Sprache, und biete Deutsch oder Englisch an."
+                ),
+            }
         )
+        return
+
+    if session.language.choose(code):
+        # The model's own prompt must change before it answers this result, so
+        # the update goes into its input queue ahead of the result. The voice
+        # update travels downstream like any other frame.
+        llm_update, tts_update = switch_frames(code)
+        await params.llm.queue_frame(llm_update)
+        await params.llm.push_frame(tts_update)
+
+    name = SUPPORTED[code]
+    await params.result_callback(
+        {
+            "switched": True,
+            "language": name,
+            "say": (
+                f"Sprich ab jetzt {name}. Kündige den Wechsel nicht lange an: "
+                "beantworte direkt, was der Anrufer zuletzt wollte, auf "
+                f"{name}, oder frage auf {name}, wie du helfen kannst."
+            ),
+        }
+    )
 
 
 TOOLS = [
@@ -390,4 +487,5 @@ TOOLS = [
     book_appointment,
     take_callback_request,
     transfer_to_staff,
+    switch_language,
 ]
