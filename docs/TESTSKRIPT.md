@@ -69,10 +69,13 @@ Preissperre nicht.
 | „Ich würde gern zur Beratung vorbeikommen." | Fragt nach Filiale, oder bietet Termine an. |
 | „In Barmbek." | Nennt höchstens zwei Termine. |
 | *(einen auswählen)* | Fragt nach Name und Telefonnummer. |
-| Namen und Nummer nennen | **Liest die Nummer in Ziffern zurück** zur Bestätigung. |
-| „Ja, richtig." | Bestätigt Termin mit Tag, Uhrzeit und Bramfelder Straße 95. |
+| Nummer **in Stücken** mit Pausen diktieren: „null eins fünf zwei" … „eins neun" … | Sagt in jeder Pause nur **„Mhm."** und lässt Sie weiterreden. Kein „Could…", kein angefangener Satz. |
+| Nummer zu Ende sagen, kurz still sein | **Liest die Nummer Ziffer für Ziffer zurück**: „Also: null eins fünf zwei, …" — nie als große Zahl. |
+| „Ja, richtig." | Bucht **sofort** und bestätigt Termin mit Tag, Uhrzeit und Bramfelder Straße 95. |
+| *(nur wenn E-Mail eingerichtet ist)* | Fragt erst **danach**, ob Sie die Bestätigung per E-Mail möchten. |
+| Adresse diktieren, z. B. „anas dot rabbani at the rate gmail dot com" | Sagt „Mhm" in den Pausen, buchstabiert die Adresse dann zurück. Nach zwei falschen Versuchen lässt sie es — der Termin bleibt gebucht. |
 
-→ `/office` neu laden: Zeile unter **Termine**, Zähler oben auf 1.
+→ `/office` neu laden: Zeile unter **Termine**, Zähler oben auf 1 — auch wenn Sie bei der E-Mail auflegen.
 
 ## 7. Denselben Termin nochmal
 
@@ -141,4 +144,6 @@ Anruf ohne Kontaktdaten wäre sonst spurlos verloren gewesen.
 | Nennt Preise | Sperre greift nicht — bitte melden. |
 | Antwortet sehr langsam | Kostenloses Gemini-Kontingent gedrosselt. Auf `LLM_PROVIDER=openai` wechseln. |
 | Englisch klingt deutsch | Sprachwechsel kommt nicht an der Stimme an → `uv run python tests/test_language.py` |
+| Redet in Ihre Pausen hinein | `TURN_STOP_SECS` erhöhen (Standard 2.0). Beim Diktieren sollte sie nur „Mhm" sagen — tut sie mehr, bitte mit Transkript melden. |
+| Antwortet zu langsam | `TURN_STOP_SECS` senken, und `LLM_MODEL=gpt-4.1-mini` prüfen (keine „denkenden" Modelle). |
 | Wechselt nach einem einzelnen Wort die Sprache | Bitte melden, mit Transkript aus `/office`. Schwellen: `STRONG_WORDS` in `language.py`. |

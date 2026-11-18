@@ -19,6 +19,8 @@ import sys
 
 from dotenv import load_dotenv
 from loguru import logger
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndWorkerFrame, LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -32,11 +34,12 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
-from pipecat.turns.user_start import MinWordsUserTurnStartStrategy
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from receptionist import config, prompts, store, telephony
+from receptionist.dictation import DictationAwareMinWords
 from receptionist.language import LanguageSwitcher, phrase
 from receptionist.tools import TOOLS, CallSession
 
@@ -63,6 +66,13 @@ INTERRUPT_MIN_WORDS = int(os.getenv("INTERRUPT_MIN_WORDS", "2"))
 # a dropped call does not sit open billing by the minute. 0 disables.
 USER_IDLE_SECONDS = float(os.getenv("USER_IDLE_SECONDS", "10"))
 IDLE_PROMPTS_BEFORE_HANGUP = 2
+
+# Longest silence before the caller's turn is treated as over, even if the
+# turn model thinks they have more to say. Pipecat's default is 3s, and every
+# turn that hits it makes the bot feel slow. Pauses while dictating a number
+# are no longer a reason to wait: those get a "mhm" and the bot keeps
+# listening (see receptionist.dictation).
+TURN_STOP_SECS = float(os.getenv("TURN_STOP_SECS", "2.0"))
 
 # A technical error is announced at most this often. More than that and the
 # caller hears the same apology on a loop while nothing else happens.
@@ -187,7 +197,9 @@ def build_llm(system_instruction: str):
     return OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY", ""),
         settings=OpenAILLMService.Settings(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            # Fast and non-reasoning: a reasoning model "thinks" before every
+            # reply, and on a phone that pause is audible.
+            model=os.getenv("LLM_MODEL", "gpt-4.1-mini"),
             system_instruction=system_instruction,
             **({"temperature": temperature} if temperature is not None else {}),
         ),
@@ -262,6 +274,7 @@ async def _end_call_after(seconds: int, runner: WorkerRunner, session: CallSessi
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, session: CallSession):
     """Wire the pipeline and run one call to completion."""
+    session.idle_seconds = USER_IDLE_SECONDS
     language = session.language.current
     stt = build_stt()
     llm = build_llm(prompts.system_prompt(language))
@@ -272,11 +285,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
-            # Only the start strategy changes; the stop side keeps Pipecat's
-            # default Smart Turn model, which waits out a caller pausing
-            # mid-sentence ("my number is ... zero one seven two ...").
             user_turn_strategies=UserTurnStrategies(
-                start=[MinWordsUserTurnStartStrategy(min_words=INTERRUPT_MIN_WORDS)]
+                # Two words to interrupt, so "mhm" does not cut the bot off --
+                # dropping to one while the caller dictates, so no digit of a
+                # number is thrown away.
+                start=[DictationAwareMinWords(session=session, min_words=INTERRUPT_MIN_WORDS)],
+                # Smart Turn decides when the caller is done; TURN_STOP_SECS
+                # caps how long it may wait when unsure.
+                stop=[
+                    TurnAnalyzerUserTurnStopStrategy(
+                        turn_analyzer=LocalSmartTurnAnalyzerV3(
+                            params=SmartTurnParams(stop_secs=TURN_STOP_SECS)
+                        )
+                    )
+                ],
             ),
             user_idle_timeout=USER_IDLE_SECONDS,
         ),
@@ -357,6 +379,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
         # was just said -- and only give up after that has not worked twice.
         nonlocal idle_prompts
         if session.transferring:
+            return
+        if session.dictating:
+            # Silence after a "mhm" means the caller has finished dictating
+            # and is waiting to hear it back. Not an idle caller.
+            tool = "read_back_phone_number" if session.dictating == "phone" else "read_back_email"
+            await worker.queue_frames(
+                [
+                    LLMMessagesAppendFrame(
+                        messages=[
+                            {
+                                "role": "developer",
+                                "content": (
+                                    "(Hinweis vom System: Der Anrufer hat aufgehört zu "
+                                    f"diktieren. Rufe jetzt {tool} mit allem, was er davon "
+                                    "gesagt hat, und finished=true auf.)"
+                                ),
+                            }
+                        ],
+                        run_llm=True,
+                    )
+                ]
+            )
             return
         idle_prompts += 1
         if idle_prompts > IDLE_PROMPTS_BEFORE_HANGUP:

@@ -12,20 +12,41 @@ one second ago) without that logic leaking into the system prompt.
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 
 from loguru import logger
-from pipecat.frames.frames import EndWorkerFrame, FunctionCallResultProperties, TTSSpeakFrame
+from pipecat.frames.frames import (
+    EndWorkerFrame,
+    FunctionCallResultProperties,
+    TTSSpeakFrame,
+    UserIdleTimeoutUpdateFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 
 from receptionist import config, notify, store, telephony
+from receptionist.dictation import (
+    email_looks_incomplete,
+    email_read_back,
+    normalize_spoken_email,
+    parse_spoken_phone,
+    phone_looks_complete,
+    phone_read_back,
+)
 from receptionist.language import SUPPORTED, LanguagePolicy, phrase, resolve, switch_frames
 
 # Seconds to let "one moment, I'm putting you through" play before Twilio takes
 # the call away from us. Redirecting at once cut the sentence off mid-word.
 TRANSFER_SPEAK_SECONDS = 3.0
+
+# After a "mhm" mid-dictation, this much silence means the caller is done and
+# is waiting for the read-back. Much shorter than the normal idle check-in.
+DICTATION_IDLE_SECONDS = 2.5
+
+# Times an email address is read back before giving up on it. The appointment
+# is already booked by then, so giving up costs nothing but the email.
+MAX_EMAIL_READ_BACKS = 2
 
 # Strong references to fire-and-forget tasks; asyncio only keeps weak ones.
 _background: set[asyncio.Task] = set()
@@ -59,6 +80,18 @@ class CallSession:
     # Anything else worth reading later -- errors, timeouts. Not a success.
     events: list[str] = field(default_factory=list)
     language: LanguagePolicy = field(default_factory=LanguagePolicy)
+    # The normal idle check-in delay, restored after dictation. Set by bot.py.
+    idle_seconds: float = 10.0
+    # "phone" or "email" while the caller is dictating one, else None.
+    dictating: str | None = None
+    # What the caller heard read back. Bookings and callbacks use this rather
+    # than whatever the model passes, so a confirmed number cannot be
+    # re-garbled on the way into the database.
+    read_back_phone: str | None = None
+    read_back_email: str | None = None
+    email_read_backs: int = 0
+    # The appointment booked on this call, for the email confirmation after it.
+    booking: dict | None = None
 
     def note(self, what: str) -> None:
         """Record a capture: the call achieved something the office can act on."""
@@ -86,39 +119,6 @@ _WEEKDAY_EN = {
     "Samstag": "Saturday",
     "Sonntag": "Sunday",
 }
-
-
-# Spoken email addresses arrive mangled. Speech-to-text writes "at" and "punkt"
-# as words, inserts spaces between every part, and never produces "@". These are
-# the spoken spellings that actually turn up, German and English.
-_EMAIL_AT = (" at ", " ät ", " aet ", " klammeraffe ", " atzeichen ")
-_EMAIL_DOT = (" dot ", " punkt ", " period ", " point ")
-
-
-def normalize_spoken_email(raw: str) -> str | None:
-    """Turn a dictated address into a real one, or None if it is not usable.
-
-    "anas punkt rabbani at gmail punkt com" -> "anas.rabbani@gmail.com"
-
-    Returning None matters as much as parsing: a confirmation sent to a
-    misheard address is worse than none, because the caller believes it is on
-    its way.
-    """
-    text = f" {(raw or '').strip().lower()} "
-    for word in _EMAIL_AT:
-        text = text.replace(word, "@")
-    for word in _EMAIL_DOT:
-        text = text.replace(word, ".")
-
-    # Speech-to-text spaces out the letters it spells; the address has none.
-    candidate = re.sub(r"\s+", "", text).strip(".,;:!?")
-    # Deepgram sometimes writes "gmail.com" as "gmail. com" -> already handled,
-    # and occasionally doubles a separator when the caller pauses.
-    candidate = re.sub(r"\.{2,}", ".", candidate).replace("@@", "@")
-
-    if not re.fullmatch(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", candidate):
-        return None
-    return candidate
 
 
 def _slot_id(slot: dict) -> str:
@@ -212,10 +212,19 @@ async def check_available_appointments(params: FunctionCallParams, day: str = ""
     )
 
 
+def _phone_for(session: CallSession, phone: str) -> str:
+    """The number to store: the one the caller confirmed, if there was one."""
+    return session.read_back_phone or parse_spoken_phone(phone) or phone or session.caller_id or ""
+
+
 async def book_appointment(
-    params: FunctionCallParams, name: str, phone: str, email: str, slot_id: str, location: str
+    params: FunctionCallParams, name: str, phone: str, slot_id: str, location: str
 ) -> None:
     """Book a free consultation appointment at one branch of the driving school.
+
+    Book as soon as you have the slot, the branch, the name and the phone
+    number. Do NOT wait for an email address: the email is asked for after
+    booking, so a caller who hangs up during it still has their appointment.
 
     Call check_available_appointments first and pass back one of the slot_id
     values it returned, exactly as written. Never build a slot_id yourself and
@@ -224,9 +233,8 @@ async def book_appointment(
 
     Args:
         name: The caller's full name as they said it.
-        phone: The caller's phone number, digits only, with country code if given.
-        email: The caller's email address, for the written confirmation. Pass an
-            empty string if they do not want to give one -- never invent it.
+        phone: The caller's phone number. If you read it back with
+            read_back_phone_number, the confirmed number is used automatically.
         slot_id: A slot_id from check_available_appointments, copied exactly.
         location: Which branch the caller wants: Barmbek, Billstedt, Harburg or
             Langenhorn. Ask the caller if they have not said.
@@ -264,18 +272,15 @@ async def book_appointment(
         )
         return
 
-    # A misheard address is worse than none: the caller then waits for a
-    # confirmation that was never deliverable.
-    clean_email = normalize_spoken_email(email) if email else None
-
+    number = _phone_for(session, phone)
     booking_id = store.add_booking(
         call_sid=session.call_sid,
         name=name,
-        phone=phone or session.caller_id or "",
+        phone=number,
         slot_date=match["date"],
         slot_time=match["time"],
         location=branch,
-        email=clean_email,
+        email=None,
         topic="Beratungsgespräch",
     )
     if booking_id is None:
@@ -289,11 +294,17 @@ async def book_appointment(
     address = config.location_address(branch)
     described = _describe_slot(match)
     where = f"Filiale {branch}" + (f", {address}" if address else "")
+    session.booking = {
+        "id": booking_id,
+        "name": name,
+        "when": described["say_german"],
+        "where": where,
+    }
 
     _in_background(
         notify.notify_booking(
             name=name,
-            phone=phone or session.caller_id or "",
+            phone=number,
             slot_date=match["date"],
             slot_time=match["time"],
             topic=f"Beratungsgespräch, Filiale {branch}"
@@ -301,39 +312,22 @@ async def book_appointment(
         )
     )
 
-    confirmation_sent = bool(clean_email) and notify.can_email_callers()
-    if confirmation_sent:
-        _in_background(
-            notify.confirm_booking_to_caller(
-                to_email=clean_email, name=name, when=described["say_german"], where=where
-            )
-        )
-
-    if email and not clean_email:
-        # We heard something but could not make an address of it. Say so rather
-        # than let the caller expect an email that will never arrive.
-        email_line = (
-            "Die E-Mail-Adresse hast du nicht sicher verstanden. Sage, dass die "
-            "Bestätigung nur mündlich erfolgt, und biete an, sie noch einmal "
-            "zu buchstabieren."
-        )
-    elif confirmation_sent:
-        email_line = f"Sage, dass die Bestätigung gleich per E-Mail an {clean_email} kommt."
-    elif clean_email:
-        email_line = "Erwähne die E-Mail nicht weiter."
-    else:
-        email_line = ""
+    # Only offer an email confirmation that can actually be sent. With Resend's
+    # shared test sender it cannot, and asking would waste the caller's time.
+    next_step = (
+        "Frage dann locker, ob der Anrufer die Bestätigung auch per E-Mail möchte."
+        if notify.can_email_callers()
+        else "Frage dann, ob du sonst noch helfen kannst. Frage NICHT nach einer E-Mail."
+    )
     await params.result_callback(
         {
             "booked": True,
             "location": branch,
-            "email_confirmation_sent": confirmation_sent,
             "say": (
-                f"Bestätige jetzt EINMAL, in einem Satz: {name}, "
+                f"Der Termin ist gespeichert. Bestätige ihn EINMAL, kurz und warm: "
                 f"{described['say_german']} (englisch: {described['say_english']}), {where}. "
                 + ("" if address else "Sage, dass ein Kollege die genaue Adresse noch durchgibt. ")
-                + (f"{email_line} " if email_line else "")
-                + "Frage dann, ob du sonst noch helfen kannst."
+                + next_step
             ),
         }
     )
@@ -353,7 +347,7 @@ async def take_callback_request(
         topic: One short sentence on what the caller wants, in German.
     """
     session: CallSession = params.app_resources
-    number = phone or session.caller_id or ""
+    number = _phone_for(session, phone)
 
     if not number:
         await params.result_callback(
@@ -482,10 +476,202 @@ async def switch_language(params: FunctionCallParams, language: str) -> None:
     )
 
 
+async def _set_dictating(params: FunctionCallParams, kind: str | None) -> None:
+    """Enter or leave dictation, and move the idle timer with it.
+
+    While dictating, a short silence after "mhm" means the caller is done and
+    waiting -- so the idle check-in fires after DICTATION_IDLE_SECONDS and
+    asks for the read-back, instead of "are you still there?" after ten.
+    """
+    session: CallSession = params.app_resources
+    if session.dictating == kind:
+        return
+    session.dictating = kind
+    timeout = DICTATION_IDLE_SECONDS if kind else session.idle_seconds
+    await params.llm.push_frame(
+        UserIdleTimeoutUpdateFrame(timeout=timeout), FrameDirection.UPSTREAM
+    )
+
+
+async def _speak(params: FunctionCallParams, text: str, result: dict) -> None:
+    """Say a fixed line ourselves and do not run the model again.
+
+    Faster than a second model round-trip, and the words cannot be changed on
+    the way -- which is the whole point for a read-back.
+    """
+    await params.llm.push_frame(TTSSpeakFrame(text))
+    await params.result_callback(result, properties=FunctionCallResultProperties(run_llm=False))
+
+
+async def read_back_phone_number(
+    params: FunctionCallParams, spoken: str, finished: bool = False
+) -> None:
+    """Take down a phone number the caller is dictating, and read it back.
+
+    Call this EVERY time the caller says any part of a phone number. Pass
+    EVERYTHING they have said of the number so far, word for word, with all
+    the pieces joined in order (first "plus four nine one five two", then
+    "plus four nine one five two one nine four eight", and so on). Do not
+    convert, tidy or shorten it. This tool speaks by itself: a short "mhm"
+    while the number is still incomplete, or the number read back digit by
+    digit once it is complete. Say nothing yourself after calling it.
+
+    Args:
+        spoken: Everything the caller has said of the number so far, verbatim.
+        finished: True when the caller says they are done, or the system tells
+            you they have stopped talking. Then it is read back even if short.
+    """
+    session: CallSession = params.app_resources
+    language = session.language.current
+    number = parse_spoken_phone(spoken)
+
+    if not finished and not phone_looks_complete(number):
+        await _set_dictating(params, "phone")
+        await _speak(params, "Mhm.", {"status": "listening", "heard_so_far": number})
+        return
+
+    await _set_dictating(params, None)
+    if len(number.lstrip("+")) < 6:
+        await params.result_callback(
+            {
+                "status": "unclear",
+                "say": (
+                    "Die Nummer ist nicht ganz angekommen. Sage das kurz und freundlich und "
+                    "bitte darum, sie langsam noch einmal zu sagen."
+                ),
+            }
+        )
+        return
+
+    session.read_back_phone = number
+    await _speak(
+        params,
+        f"{phrase('read_back_intro', language)} {phone_read_back(number)}. "
+        f"{phrase('is_that_right', language)}",
+        {
+            "status": "read_back",
+            "number": number,
+            "next": (
+                "Warte auf ja oder nein. Bei nein: frage nach der richtigen Nummer und rufe "
+                "dieses Werkzeug mit den neuen Worten erneut auf."
+            ),
+        },
+    )
+
+
+async def read_back_email(params: FunctionCallParams, spoken: str, finished: bool = False) -> None:
+    """Take down an email address the caller is dictating, and read it back.
+
+    Only use this after the appointment is booked and the caller wants an
+    email confirmation. Call it EVERY time the caller says any part of the
+    address, passing EVERYTHING they have said of it so far, word for word,
+    all pieces joined in order. Do not convert or guess. This tool speaks by
+    itself: "mhm" while the address is incomplete, or the address spelled
+    back once it is complete. Say nothing yourself after calling it.
+
+    Args:
+        spoken: Everything the caller has said of the address so far, verbatim.
+        finished: True when the caller says they are done, or the system tells
+            you they have stopped talking.
+    """
+    session: CallSession = params.app_resources
+    language = session.language.current
+
+    if not finished and email_looks_incomplete(spoken):
+        await _set_dictating(params, "email")
+        await _speak(params, "Mhm.", {"status": "listening"})
+        return
+
+    await _set_dictating(params, None)
+    email = normalize_spoken_email(spoken)
+
+    if session.email_read_backs >= MAX_EMAIL_READ_BACKS or (
+        email is None and session.email_read_backs >= MAX_EMAIL_READ_BACKS - 1
+    ):
+        session.read_back_email = None
+        await params.result_callback(
+            {
+                "status": "give_up",
+                "say": (
+                    "Lass die E-Mail jetzt sein. Sage locker, dass das gar kein Problem ist, "
+                    "der Termin ist ja fest gebucht. Frage NICHT noch einmal nach der "
+                    "E-Mail, sondern ob du sonst noch helfen kannst."
+                ),
+            }
+        )
+        return
+
+    session.email_read_backs += 1
+    if email is None:
+        await params.result_callback(
+            {
+                "status": "unclear",
+                "say": (
+                    "Die Adresse ist nicht sicher angekommen. Bitte freundlich darum, den Teil "
+                    "vor dem @ langsam Buchstabe für Buchstabe zu sagen."
+                ),
+            }
+        )
+        return
+
+    session.read_back_email = email
+    await _speak(
+        params,
+        f"{phrase('read_back_intro', language)} {email_read_back(email, language)}. "
+        f"{phrase('is_that_right', language)}",
+        {
+            "status": "read_back",
+            "email": email,
+            "next": (
+                "Bei ja: rufe send_confirmation_email auf. Bei nein: bitte darum, die "
+                "Adresse noch einmal zu sagen, und rufe dieses Werkzeug erneut auf."
+            ),
+        },
+    )
+
+
+async def send_confirmation_email(params: FunctionCallParams) -> None:
+    """Email the caller their booking confirmation.
+
+    Call this only after read_back_email read the address back and the caller
+    said it is right. The address that was read back is used.
+    """
+    session: CallSession = params.app_resources
+    email, booking = session.read_back_email, session.booking
+
+    if not booking:
+        await params.result_callback(
+            {"sent": False, "say": "Es gibt noch keinen gebuchten Termin. Buche zuerst."}
+        )
+        return
+    if not email:
+        await params.result_callback(
+            {"sent": False, "say": "Lies die Adresse zuerst mit read_back_email zurück."}
+        )
+        return
+
+    store.set_booking_email(booking["id"], email)
+    session.note(f"E-Mail für Bestätigung: {email}")
+    _in_background(
+        notify.confirm_booking_to_caller(
+            to_email=email, name=booking["name"], when=booking["when"], where=booking["where"]
+        )
+    )
+    await params.result_callback(
+        {
+            "sent": True,
+            "say": "Sage kurz, dass die Bestätigung gleich kommt, und frage, ob du sonst noch helfen kannst.",
+        }
+    )
+
+
 TOOLS = [
     check_available_appointments,
     book_appointment,
     take_callback_request,
     transfer_to_staff,
     switch_language,
+    read_back_phone_number,
+    read_back_email,
+    send_confirmation_email,
 ]
