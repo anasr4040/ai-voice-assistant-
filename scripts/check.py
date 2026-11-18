@@ -22,6 +22,7 @@ FREE_SUITES = [
     ("Actions the bot can take", "tests/test_tools.py"),
     ("System prompt reaches the model", "tests/test_prompt_delivery.py"),
     ("Language switching, model and voice together", "tests/test_language.py"),
+    ("Numbers, emails and booking order", "tests/test_dictation.py"),
     ("A whole call, end to end", "tests/test_pipeline_e2e.py"),
 ]
 

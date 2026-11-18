@@ -157,6 +157,12 @@ def add_booking(**fields: Any) -> int | None:
         return None
 
 
+def set_booking_email(booking_id: int, email: str) -> None:
+    """Attach the caller's confirmed address to a booking made earlier in the call."""
+    with connect() as conn:
+        conn.execute("UPDATE bookings SET email = ? WHERE id = ?", (email, booking_id))
+
+
 def start_call(call_sid: str | None, caller_id: str | None) -> int:
     """Record an answered call. Returns its row id, which identifies it later.
 

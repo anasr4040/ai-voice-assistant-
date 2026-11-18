@@ -54,7 +54,9 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{f' -- {detail}' if detail else ''}")
 
 
-async def drive(turns: list[dict], said: str, expect_requests: int = 1) -> FakeLLM:
+async def drive(
+    turns: list[dict], said: str, expect_requests: int = 1, session: CallSession | None = None
+) -> FakeLLM:
     """Run one scripted exchange through the real pipeline, as production does.
 
     Uses PipelineWorker and WorkerRunner exactly like bot.py, rather than a
@@ -80,8 +82,9 @@ async def drive(turns: list[dict], said: str, expect_requests: int = 1) -> FakeL
 
     context = LLMContext(tools=TOOLS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
-    session = CallSession(call_sid=None, caller_id="+4917612345678")
-    session.call_id = store.start_call(None, "+4917612345678")
+    if session is None:
+        session = CallSession(call_sid=None, caller_id="+4917612345678")
+        session.call_id = store.start_call(None, "+4917612345678")
 
     pipeline = Pipeline([user_aggregator, llm, assistant_aggregator])
     worker = PipelineWorker(
@@ -134,7 +137,7 @@ async def main() -> int:
     check("model was actually called", len(fake.requests) >= 1, f"{len(fake.requests)} request(s)")
     offered = fake.tools_offered()
     check(
-        "all five tools were advertised",
+        "all eight tools were advertised",
         set(offered)
         == {
             "check_available_appointments",
@@ -142,6 +145,9 @@ async def main() -> int:
             "take_callback_request",
             "transfer_to_staff",
             "switch_language",
+            "read_back_phone_number",
+            "read_back_email",
+            "send_confirmation_email",
         },
         ", ".join(sorted(offered)),
     )
@@ -191,7 +197,6 @@ async def main() -> int:
                 "args": {
                     "name": "Ben Meier",
                     "phone": "+4915112345",
-                    "email": "ben punkt meier at web punkt de",
                     "slot_id": slot["slot_id"],
                     "location": "Barmbek",
                 },
@@ -206,8 +211,8 @@ async def main() -> int:
     if bookings:
         check("branch recorded", bookings[0]["location"] == "Barmbek", str(bookings[0]["location"]))
         check(
-            "spoken email normalised through the real dispatch",
-            bookings[0]["email"] == "ben.meier@web.de",
+            "booked without waiting for an email",
+            bookings[0]["email"] is None,
             str(bookings[0]["email"]),
         )
         check(
@@ -224,7 +229,6 @@ async def main() -> int:
                 "args": {
                     "name": "Carla",
                     "phone": "+49170",
-                    "email": "",
                     "slot_id": slot["slot_id"],
                     "location": "Altona",  # not a real branch
                 },
@@ -239,6 +243,49 @@ async def main() -> int:
         not [b for b in store.recent_bookings() if b["name"] == "Carla"],
     )
     check("pipeline survived and asked again", len(fake.requests) >= 2)
+
+    print("\n5. Dictation: a pause gets a 'mhm', not a sentence")
+    caller = CallSession(call_sid=None, caller_id=None)
+    caller.call_id = store.start_call(None, None)
+    fake = await drive(
+        [
+            {"tool": "read_back_phone_number", "args": {"spoken": "plus four nine, one five two"}},
+            {"text": "This second answer must never be requested."},
+        ],
+        "Plus four nine, one five two",
+        session=caller,
+    )
+    check(
+        "the tool said 'mhm' itself; the model was not asked again",
+        len(fake.requests) == 1,
+        f"{len(fake.requests)} request(s)",
+    )
+    check("the call is marked as mid-dictation", caller.dictating == "phone")
+
+    fake = await drive(
+        [
+            {
+                "tool": "read_back_phone_number",
+                "args": {
+                    "spoken": "plus four nine, one five two, one nine. four eight six seven two"
+                },
+            },
+            {"text": "This second answer must never be requested."},
+        ],
+        "one nine. Four eight six seven two.",
+        session=caller,
+    )
+    check(
+        "the complete number is read back by the tool, not the model",
+        len(fake.requests) == 1,
+        f"{len(fake.requests)} request(s)",
+    )
+    check(
+        "every digit of the test call's number survived",
+        caller.read_back_phone == "+491521948672",
+        str(caller.read_back_phone),
+    )
+    check("dictation is over", caller.dictating is None)
 
     print(f"\n{'=' * 58}\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

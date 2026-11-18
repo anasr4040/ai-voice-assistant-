@@ -53,7 +53,7 @@ class FakeParams:
     async def result_callback(self, result, **kwargs):
         self.result = result
 
-    async def push_frame(self, frame):
+    async def push_frame(self, frame, direction=None):
         self.frames.append(frame)
 
 
@@ -85,7 +85,6 @@ async def main() -> int:
         params,
         name="Anna Schmidt",
         phone="+4917612345678",
-        email="",
         slot_id=first["slot_id"],
         location="Barmbek",
     )
@@ -111,7 +110,6 @@ async def main() -> int:
         params,
         name="Ben Meier",
         phone="+49170000",
-        email="",
         slot_id=first["slot_id"],
         location="Barmbek",
     )
@@ -124,7 +122,6 @@ async def main() -> int:
         params,
         name="Carla Weiss",
         phone="+49170111",
-        email="",
         slot_id=first["slot_id"].replace("T16:00", "T03:00"),
         location="Barmbek",
     )
@@ -136,7 +133,6 @@ async def main() -> int:
         params,
         name="Emil Braun",
         phone="+49170222",
-        email="",
         slot_id=first["slot_id"],
         location="Altona",
     )
@@ -150,7 +146,6 @@ async def main() -> int:
         params,
         name="Fatima Yilmaz",
         phone="+49170333",
-        email="",
         slot_id=free["slot_id"],
         location="Billstedt",
     )
@@ -296,7 +291,6 @@ async def main() -> int:
         params,
         name="Elif Kaya",
         phone="+49170444",
-        email="",
         slot_id=free["slot_id"],
         location="Harburg",
     )
@@ -311,7 +305,6 @@ async def main() -> int:
         params,
         name="Gul Demir",
         phone="+49170555",
-        email="",
         slot_id="not-a-real-slot-id",
         location="Harburg",
     )
@@ -380,59 +373,14 @@ async def main() -> int:
     for junk in ["", "uhh my email", "at gmail dot com", "anas rabbani at gmail com"]:
         check(f"refuses {junk!r} rather than guessing", tools.normalize_spoken_email(junk) is None)
 
-    fresh = tools._describe_slot(store.free_slots()[0])
-    params = FakeParams(session)
-    await tools.book_appointment(
-        params,
-        name="Hanna Vogt",
-        phone="+49170888",
-        email="hanna punkt vogt at web punkt de",
-        slot_id=fresh["slot_id"],
-        location="Barmbek",
-    )
-    stored = [b for b in store.recent_bookings() if b["name"] == "Hanna Vogt"]
-    check(
-        "booking stores the normalised address",
-        bool(stored) and stored[0]["email"] == "hanna.vogt@web.de",
-        str(stored[0]["email"]) if stored else "no row",
-    )
-
-    fresh = tools._describe_slot(store.free_slots()[0])
-    params = FakeParams(session)
-    await tools.book_appointment(
-        params,
-        name="Jonas Feld",
-        phone="+49170999",
-        email="",
-        slot_id=fresh["slot_id"],
-        location="Barmbek",
-    )
-    check("declining an email still books", params.result.get("booked") is True)
-
-    fresh = tools._describe_slot(store.free_slots()[0])
-    params = FakeParams(session)
-    await tools.book_appointment(
-        params,
-        name="Klara Sonn",
-        phone="+49170111",
-        email="uhh my email",
-        slot_id=fresh["slot_id"],
-        location="Barmbek",
-    )
-    check(
-        "a garbled address never becomes a booking field",
-        [b for b in store.recent_bookings() if b["name"] == "Klara Sonn"][0]["email"] is None,
-    )
-    check(
-        "and the caller is told, not left waiting",
-        "nicht sicher verstanden" in params.result.get("say", ""),
-    )
+    # Booking with an email, and garbled addresses, are covered by
+    # tests/test_dictation.py: the email is now taken after booking.
 
     print("\n8j. Behaving like a person, not a form")
     prompt_text = system_prompt()
     for label, marker in [
-        ("asks for an email for the confirmation", "E-Mail für die Terminbestätigung"),
-        ("reads the address back", "zur Kontrolle zurück"),
+        ("books before asking for an email", "Warte NIE auf eine E-Mail-Adresse"),
+        ("leaves read-backs to the tools", "Lies Nummern oder Adressen nie"),
         ("accepts a refusal without pushing", "Frage kein zweites Mal"),
         ("admits when it misheard", "das habe ich nicht ganz verstanden"),
         ("knows STT produces nonsense", "En dat scheet"),
@@ -517,7 +465,6 @@ async def main() -> int:
         params,
         name="Ida Roth",
         phone="+49170777",
-        email="",
         slot_id="2026-09-22T15:00",
         location="Barmbek",
     )
