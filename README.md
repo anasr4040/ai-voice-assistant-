@@ -35,6 +35,7 @@ You do not install libraries one by one. The only prerequisites are:
 | **Python 3.11+** | `python3 --version` |
 | **uv** | `curl -LsSf https://astral.sh/uv/install.sh \| sh` (macOS/Linux) or `winget install astral-sh.uv` (Windows) |
 | **Linux only** | `sudo apt install libgomp1` — needed by onnxruntime, which runs the voice-activity model. macOS and Windows already have it. |
+| **Windows** | If a test fails with *"DLL load failed ... An Application Control policy has blocked this file"*, Windows Smart App Control (or a work PC's App Control policy) is blocking a compiled Python package. Turn Smart App Control off under Windows Security → App & browser control, or run the project inside WSL instead. |
 
 Then one command installs everything, pinned by `uv.lock`:
 
