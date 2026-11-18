@@ -102,7 +102,7 @@ async def drive(turns: list[dict], said: str, expect_requests: int = 1) -> FakeL
             ]
         )
         # Wait for the model to be called the expected number of times.
-        for _ in range(100):
+        for _ in range(600):  # up to 60s on a slow machine
             if len(fake.requests) >= expect_requests:
                 await asyncio.sleep(0.4)  # let the tool run and the result post back
                 break
@@ -117,6 +117,14 @@ async def drive(turns: list[dict], said: str, expect_requests: int = 1) -> FakeL
 
 async def main() -> int:
     store.init()
+    # Pipecat loads a sentence tokenizer the first time a pipeline starts, and
+    # downloads its data once per machine. On a cold machine that took longer
+    # than the time budget below, and the first pipeline check failed with
+    # "model was called" while every later one passed. Load it up front.
+    print("\nLoading Pipecat's sentence tokenizer (downloaded once per machine)...")
+    from pipecat.utils.prewarm import warm_deferred_imports
+
+    warm_deferred_imports()
 
     print("\n1. The pipeline reaches the model with the right payload")
     fake = await drive(

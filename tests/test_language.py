@@ -261,7 +261,7 @@ async def run_call(turns: list[dict], transcript: TranscriptionFrame, expect_req
     try:
         await asyncio.sleep(0.3)
         await worker.queue_frames([transcript])
-        for _ in range(100):
+        for _ in range(600):  # up to 60s on a slow machine
             if len(fake.requests) >= expect_requests:
                 await asyncio.sleep(0.5)
                 break
@@ -340,6 +340,14 @@ async def pipeline_checks() -> None:
 
 async def main() -> int:
     store.init()
+    # Pipecat loads a sentence tokenizer the first time a pipeline starts, and
+    # downloads its data once per machine. On a cold machine that took longer
+    # than the time budget below, and the first pipeline check failed with
+    # "model was called" while every later one passed. Load it up front.
+    print("\nLoading Pipecat's sentence tokenizer (downloaded once per machine)...")
+    from pipecat.utils.prewarm import warm_deferred_imports
+
+    warm_deferred_imports()
     policy_checks()
     detection_checks()
     coverage_checks()
