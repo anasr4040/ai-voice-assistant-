@@ -18,6 +18,11 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
+# Pipecat's sentence tokenizer data. Fetched at build time, so a new container's
+# first call does not wait in silence while it downloads.
+ENV NLTK_DATA=/app/nltk_data
+RUN uv run --no-sync python -m nltk.downloader -d /app/nltk_data punkt_tab
+
 COPY bot.py ./
 COPY scripts/ ./scripts/
 COPY tests/ ./tests/
