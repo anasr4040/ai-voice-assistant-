@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import re
 
+from pipecat.frames.frames import Frame, TranscriptionFrame
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_start import MinWordsUserTurnStartStrategy
+from pipecat.turns.user_stop import BaseUserTurnStopStrategy
 
 # --- Phone numbers ----------------------------------------------------------
 
@@ -373,3 +377,108 @@ class DictationAwareMinWords(MinWordsUserTurnStartStrategy):
     @_min_words.setter
     def _min_words(self, value: int) -> None:
         self._base_min_words = value
+
+
+# --- Did the caller actually say it? ----------------------------------------
+
+
+class HeardRecorder(FrameProcessor):
+    """Keeps the caller's last few utterances, exactly as speech-to-text heard them.
+
+    In a test call the model, asked to take down an email, invented one
+    ("atest@example.com") and had it read back before the caller had said a
+    word. Comparing what a tool is handed against what was actually heard
+    stops that.
+    """
+
+    def __init__(self, session, keep: int = 12, **kwargs):
+        super().__init__(**kwargs)
+        self._session = session
+        self._keep = keep
+        session.heard = []
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+            self._session.heard.append(frame.text)
+            del self._session.heard[: -self._keep]
+        await self.push_frame(frame, direction)
+
+
+def _compact(text: str) -> str:
+    """Letters and digits only, with spoken "dot"/"at" words removed."""
+    text = _replace_words(text.lower(), _EMAIL_AT + _EMAIL_DOT, " ")
+    return re.sub(r"[^a-z0-9äöüß]", "", text)
+
+
+def email_was_heard(email: str, heard: list[str] | None) -> bool:
+    """Whether the part before "@" appears in what the caller recently said.
+
+    None means nothing records what was heard (tests, or a pipeline without
+    the recorder): the check is skipped rather than failing every address.
+    """
+    if heard is None:
+        return True
+    local = re.sub(r"[^a-z0-9]", "", email.split("@", 1)[0])
+    return bool(local) and local in _compact(" ".join(heard))
+
+
+def phone_was_heard(number: str, heard: list[str] | None) -> bool:
+    """Whether the number's digits appear in what the caller recently said."""
+    if heard is None:
+        return True
+    digits = number.lstrip("+")
+    return bool(digits) and digits in parse_spoken_phone(" ".join(heard)).lstrip("+")
+
+
+# --- Ending the caller's turn sooner -----------------------------------------
+
+# Replies that are complete the moment they are said. Negations are left out on
+# purpose: "no" is very often followed by the correction ("no, it's 0172...").
+_SHORT_REPLY_WORDS = frozenset(
+    """
+    yes yeah yep yup ok okay sure right correct exactly perfect great fine
+    thanks thank you too bye goodbye cheers alright that's that is it sounds good
+    ja jo jap jawohl genau richtig stimmt passt gut gerne gern danke schön sehr
+    vielen dank tschüss tschüs ciao wiederhören wiedersehen auf alles klar super
+    evet tamam teşekkürler sağ ol görüşürüz
+    да хорошо спасибо пока
+    так добре дякую
+    tak dobrze dziękuję
+    da bine mulțumesc
+    sí si vale gracias adiós
+    oui merci d'accord au revoir
+    sì grazie bene
+    sim obrigado obrigada tchau
+    نعم شكرا تمام
+    """.split()
+)
+
+
+def is_short_reply(text: str) -> bool:
+    """A short reply that is complete as said: "Yes.", "Danke schön!", "You too. Bye."."""
+    words = re.findall(r"[^\W\d_][^\W\d_'’]*", text.lower())
+    return 0 < len(words) <= 5 and all(word in _SHORT_REPLY_WORDS for word in words)
+
+
+class ShortReplyUserTurnStopStrategy(BaseUserTurnStopStrategy):
+    """Ends the caller's turn at once on a short, complete reply.
+
+    The turn model is often unsure about one-word answers and then waits its
+    full timeout: in a test call "You too. Bye." took 2.8 seconds to answer.
+    A "yes" or a "thanks" needs no waiting at all. Off while the caller is
+    dictating, where a short word is usually followed by more.
+    """
+
+    def __init__(self, *, session, **kwargs):
+        super().__init__(**kwargs)
+        self._session = session
+
+    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+        if (
+            isinstance(frame, TranscriptionFrame)
+            and not getattr(self._session, "dictating", None)
+            and is_short_reply(frame.text)
+        ):
+            await self.trigger_user_turn_stopped()
+        return ProcessFrameResult.CONTINUE

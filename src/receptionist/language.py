@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 from pipecat.frames.frames import (
+    EagerTranscriptionFrame,
     Frame,
     LLMUpdateSettingsFrame,
     TranscriptionFrame,
@@ -69,6 +70,28 @@ SUPPORTED: dict[str, str] = {
     "it": "Italienisch",
     "pt": "Portugiesisch",
 }
+
+# Deepgram Flux, the faster speech-to-text with built-in turn detection, hears
+# fewer languages than nova-3. With it, Mia must not offer Turkish, Arabic,
+# Ukrainian, Polish or Romanian: she would switch, and then not understand.
+FLUX_LANGUAGES = frozenset({"de", "en", "es", "fr", "ru", "pt", "it"})
+
+# The languages this call can actually use. All of SUPPORTED by default;
+# bot.py narrows it to FLUX_LANGUAGES when Flux does the listening.
+_available: set[str] = set(SUPPORTED)
+
+
+def set_available(codes) -> None:
+    """Limit switching to the languages the speech-to-text in use understands."""
+    _available.clear()
+    _available.update(code for code in codes if code in SUPPORTED)
+    _available.add(BASE_LANGUAGE)
+
+
+def available() -> dict[str, str]:
+    """Usable languages and their German names, in SUPPORTED's order."""
+    return {code: name for code, name in SUPPORTED.items() if code in _available}
+
 
 # Lines spoken without the model -- when it is unreachable, or around a
 # transfer. They must exist in every supported language, because the voice is
@@ -134,6 +157,22 @@ PHRASES: dict[str, dict[str, str]] = {
         "it": "Allora:",
         "pt": "Então:",
     },
+    # Said while a tool runs. "|" separates variants; one is picked at random,
+    # so Mia does not say the same word every time.
+    "one_moment": {
+        "de": "Moment.|Einen Moment.|Sekunde.",
+        "en": "One sec.|Just a moment.|One moment.",
+        "tr": "Bir saniye.|Bir dakika.",
+        "ar": "لحظة.|لحظة من فضلك.",
+        "ru": "Секунду.|Одну минуту.",
+        "uk": "Секунду.|Хвилинку.",
+        "pl": "Chwileczkę.|Sekundę.",
+        "ro": "O clipă.|O secundă.",
+        "es": "Un momento.|Un segundo.",
+        "fr": "Un instant.|Une seconde.",
+        "it": "Un attimo.|Un secondo.",
+        "pt": "Um momento.|Um segundo.",
+    },
     "is_that_right": {
         "de": "Stimmt das so?",
         "en": "Is that right?",
@@ -188,22 +227,22 @@ def resolve(requested: str) -> str | None:
     """
     text = (requested or "").strip().lower()
     code = normalize(text)
-    if code in SUPPORTED:
+    if code in _available:
         return code
     english_names = {
         "german": "de", "english": "en", "turkish": "tr", "arabic": "ar",
         "russian": "ru", "ukrainian": "uk", "polish": "pl", "romanian": "ro",
         "spanish": "es", "french": "fr", "italian": "it", "portuguese": "pt",
     }  # fmt: skip
-    if text in english_names:
+    if english_names.get(text) in _available:
         return english_names[text]
-    for code, german_name in SUPPORTED.items():
+    for code, german_name in available().items():
         if text == german_name.lower():
             return code
     return None
 
 
-def word_languages(frame: TranscriptionFrame) -> Counter:
+def word_languages(frame: TranscriptionFrame | EagerTranscriptionFrame) -> Counter:
     """How many words of one finished utterance were in each language.
 
     Deepgram's multilingual model tags every word; that is far more reliable
@@ -222,7 +261,7 @@ def word_languages(frame: TranscriptionFrame) -> Counter:
 
     if not counts:
         # No per-word tags (another STT, or a test): fall back to the frame.
-        code = normalize(frame.language)
+        code = normalize(getattr(frame, "language", None))
         if code:
             counts[code] = len(frame.text.split())
     return counts
@@ -246,7 +285,7 @@ class LanguagePolicy:
         if language == self.current:
             self._pending = None
             return None
-        if self.pinned or language not in SUPPORTED:
+        if self.pinned or language not in _available:
             return None
         # A mixed sentence that is mostly German is German.
         if words < MIN_WORDS or words * 2 <= total:
@@ -293,17 +332,26 @@ class LanguageSwitcher(FrameProcessor):
 
     The switch frames are pushed BEFORE the transcription they were triggered
     by, so the model already has the new instruction when it answers it.
+
+    With Flux, the reply is started from an early "probably finished" transcript
+    (EagerTranscriptionFrame), before the final one arrives. The language must
+    switch on that early transcript too, or the reply is written in the old
+    language. The final transcript of the same words is then not counted twice.
     """
 
     def __init__(self, policy: LanguagePolicy, **kwargs):
         super().__init__(**kwargs)
         self._policy = policy
+        self._last_seen = ""
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, TranscriptionFrame):
-            switched_to = self._policy.observe(word_languages(frame))
-            if switched_to:
-                for update in switch_frames(switched_to):
-                    await self.push_frame(update, direction)
+        if isinstance(frame, (TranscriptionFrame, EagerTranscriptionFrame)):
+            text = " ".join(frame.text.lower().split()).strip(" .,!?")
+            if text and text != self._last_seen:
+                self._last_seen = text
+                switched_to = self._policy.observe(word_languages(frame))
+                if switched_to:
+                    for update in switch_frames(switched_to):
+                        await self.push_frame(update, direction)
         await self.push_frame(frame, direction)

@@ -293,12 +293,128 @@ def turn_taking_checks() -> None:
     check("and back to two afterwards", strategy._min_words == 2)
 
 
+async def timing_and_honesty_checks() -> None:
+    print("\n7. Faster: a pause after 'mhm' is read back without asking the model")
+    session = CallSession()
+    session.language.choose("en")
+    params = FakeParams(session)
+    await tools.read_back_phone_number(params, spoken="plus four nine, one five two one six, 5438")
+    check("an 11-digit +49 number is still mid-dictation: 'Mhm.'", params.spoken() == "Mhm.")
+    line = tools.finish_dictation(session)
+    check(
+        "the pause reads it back straight from code",
+        line == "So that's +4 9, 1 5 2, 1 6 5, 4 3 8. Is that right?",
+        str(line),
+    )
+    check("and dictation is over", session.dictating is None)
+    check("nothing to read back when nothing was dictated", tools.finish_dictation(session) is None)
+    check("the wait after 'mhm' is short", tools.DICTATION_IDLE_SECONDS <= 1.5)
+
+    print("\n8. Never read back what the caller did not say")
+    session = CallSession()
+    session.language.choose("en")
+    session.booking = {"id": 0, "name": "x", "when": "y", "where": "z"}
+    # From the test call: Mia asked for the email and, before the caller said
+    # anything, invented one and had it read back.
+    session.heard = ["No.", "Can I get an email?"]
+    params = FakeParams(session)
+    await tools.read_back_email(params, spoken="a t e s t at example dot com")
+    check(
+        "an invented address is refused, not read back",
+        params.result.get("status") == "not_heard" and params.spoken() == "",
+        str(params.result.get("status")),
+    )
+    check("and does not use up one of the two tries", session.email_read_backs == 0)
+    session.heard += ["A n a s", "dot", "r a b b a n I at", "g mail dot com."]
+    params = FakeParams(session)
+    await tools.read_back_email(params, spoken="a n a s dot r a b b a n i at g mail dot com")
+    check(
+        "what the caller really said is read back",
+        session.read_back_email == "anas.rabbani@gmail.com",
+    )
+
+    session = CallSession()
+    session.heard = ["plus four nine,", "one five two"]
+    params = FakeParams(session)
+    await tools.read_back_phone_number(
+        params, spoken="plus four nine one seven zero one two three four five six seven"
+    )
+    check("an invented phone number is refused too", params.result.get("status") == "not_heard")
+
+    print("\n9. No promise of an email that cannot be sent")
+    saved = notify.RESEND_API_KEY, notify.RESEND_FROM
+    notify.RESEND_API_KEY, notify.RESEND_FROM = "", "onboarding@resend.dev"
+    told_office: list[str] = []
+
+    async def fake_notify(subject, body):
+        told_office.append(body)
+
+    saved_notify = notify.notify
+    notify.notify = fake_notify
+    session = CallSession()
+    session.language.choose("en")
+    session.booking = {"id": 0, "name": "Anas", "when": "Donnerstag um 16 Uhr", "where": "Barmbek"}
+    session.read_back_email = "anas.rabbani@gmail.com"
+    params = FakeParams(session)
+    await tools.send_confirmation_email(params)
+    await asyncio.sleep(0.05)
+    check("not reported as sent", params.result.get("sent") is False)
+    check(
+        "Mia says honestly that email is not available", "ehrlich" in params.result.get("say", "")
+    )
+    check(
+        "the office still gets the address", any("anas.rabbani@gmail.com" in b for b in told_office)
+    )
+    notify.notify = saved_notify
+    notify.RESEND_API_KEY, notify.RESEND_FROM = saved
+
+    print("\n10. A short 'one moment' while a tool works")
+    session = CallSession()
+    session.language.choose("de")
+    params = FakeParams(session)
+    await tools.check_available_appointments(params)
+    check(
+        "checking slots starts with a filler",
+        params.spoken() in ("Moment.", "Einen Moment.", "Sekunde."),
+        params.spoken(),
+    )
+
+    print("\n11. Short replies end the turn at once")
+    for text, expected in [
+        ("Yes.", True),
+        ("You too. Bye.", True),  # took 2.8 s to answer in the test call
+        ("Danke schön!", True),
+        ("Ja, genau.", True),
+        ("No.", False),  # usually followed by the correction
+        ("Can I get an email?", False),
+        ("one five two", False),
+    ]:
+        check(f"{text!r} ends the turn: {expected}", dictation.is_short_reply(text) is expected)
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    session = CallSession()
+    strategy = dictation.ShortReplyUserTurnStopStrategy(session=session)
+    stopped: list[bool] = []
+
+    async def on_stopped(*args):
+        stopped.append(True)
+
+    strategy.add_event_handler("on_user_turn_stopped", on_stopped)
+    await strategy.process_frame(TranscriptionFrame(text="Yes.", user_id="c", timestamp=""))
+    check("the strategy ends the turn on 'Yes.'", stopped == [True])
+    session.dictating = "phone"
+    await strategy.process_frame(TranscriptionFrame(text="Yes.", user_id="c", timestamp=""))
+    check("but not while the caller is dictating", stopped == [True])
+
+
 async def main() -> int:
     store.init()
     parser_checks()
     await phone_tool_checks()
     await booking_flow_checks()
     turn_taking_checks()
+    await timing_and_honesty_checks()
 
     print(f"\n{'=' * 58}\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:
