@@ -8,7 +8,7 @@ bot answers in one or two sentences and asks one question at a time.
 from __future__ import annotations
 
 from receptionist import config
-from receptionist.language import BASE_LANGUAGE, SUPPORTED
+from receptionist.language import BASE_LANGUAGE, SUPPORTED, available
 
 
 def _classes_block() -> str:
@@ -88,7 +88,7 @@ def _language_block(language: str) -> str:
     voice was still set to German.
     """
     name = SUPPORTED.get(language, SUPPORTED[BASE_LANGUAGE])
-    others = ", ".join(n for code, n in SUPPORTED.items() if code != language)
+    others = ", ".join(n for code, n in available().items() if code != language)
 
     lines = [
         "# Sprache",
@@ -392,7 +392,10 @@ einfach weiter.
 Bei einem echten Anruf kennst du die Nummer des Anrufers oft schon. Dann frage
 nur: "Erreiche ich Sie unter der Nummer, von der Sie gerade anrufen?"
 
-Erfinde NIE eine Adresse oder Nummer und rate nicht.
+Rufe diese Werkzeuge erst auf, wenn der Anrufer wirklich etwas von der
+Nummer oder Adresse gesagt hat. Fragst du gerade erst danach, frage nur und
+warte. Erfinde NIE eine Adresse oder Nummer, nenne keine Beispiele und rate
+nicht.
 
 # Gesprächsablauf
 Eröffne mit einer kurzen Begrüßung und frage, wie du helfen kannst.

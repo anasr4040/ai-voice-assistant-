@@ -22,7 +22,12 @@ from loguru import logger
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import EndWorkerFrame, LLMMessagesAppendFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    EndWorkerFrame,
+    LLMMessagesAppendFrame,
+    TTSSpeakFrame,
+    UserIdleTimeoutUpdateFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -32,14 +37,19 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from receptionist import config, prompts, store, telephony
-from receptionist.dictation import DictationAwareMinWords
+from receptionist import config, language, prompts, store, telephony, tools
+from receptionist.dictation import (
+    DictationAwareMinWords,
+    HeardRecorder,
+    ShortReplyUserTurnStopStrategy,
+)
 from receptionist.language import LanguageSwitcher, phrase
 from receptionist.tools import TOOLS, CallSession
 
@@ -67,12 +77,28 @@ INTERRUPT_MIN_WORDS = int(os.getenv("INTERRUPT_MIN_WORDS", "2"))
 USER_IDLE_SECONDS = float(os.getenv("USER_IDLE_SECONDS", "10"))
 IDLE_PROMPTS_BEFORE_HANGUP = 2
 
-# Longest silence before the caller's turn is treated as over, even if the
-# turn model thinks they have more to say. Pipecat's default is 3s, and every
-# turn that hits it makes the bot feel slow. Pauses while dictating a number
-# are no longer a reason to wait: those get a "mhm" and the bot keeps
-# listening (see receptionist.dictation).
-TURN_STOP_SECS = float(os.getenv("TURN_STOP_SECS", "2.0"))
+# Which speech-to-text listens, and so who decides when the caller is done.
+#   flux: Deepgram Flux. Speech recognition and end-of-turn detection in one
+#         model, and it starts the reply while the caller is still finishing.
+#         The fastest turn-taking, but it hears 7 of Mia's 12 languages
+#         (no Turkish, Arabic, Ukrainian, Polish or Romanian).
+#   nova: Deepgram nova-3 plus the local Smart Turn model. All 12 languages.
+STT_ENGINE = os.getenv("STT_ENGINE", "flux").strip().lower()
+
+# Flux: languages to bias recognition toward. Most callers speak German, the
+# rest mostly English. Empty means detect freely among Flux's languages.
+FLUX_LANGUAGE_HINTS = [
+    code.strip() for code in os.getenv("FLUX_LANGUAGE_HINTS", "de,en").split(",") if code.strip()
+]
+
+# Flux: answer Flux's early "probably finished" signal, discarding the reply
+# if the caller keeps talking. Saves most of the wait before each answer.
+FLUX_EAGER = os.getenv("FLUX_EAGER", "1") != "0"
+
+# nova only: longest silence before the caller's turn is treated as over when
+# the turn model is unsure. In a test call this wait was most of the gap
+# before Mia answered. Pauses while dictating get a "mhm" either way.
+TURN_STOP_SECS = float(os.getenv("TURN_STOP_SECS", "1.0"))
 
 # A technical error is announced at most this often. More than that and the
 # caller hears the same apology on a loop while nothing else happens.
@@ -101,15 +127,33 @@ def stt_keyterms() -> list[str]:
 
 
 def build_stt():
-    """Deepgram, configured for a German caller who may switch to English.
+    """Deepgram, configured for a German caller who may switch language.
 
-    nova-3 with language="multi" handles code-switching inside one sentence,
-    which is what actually happens in Hamburg ("Ich brauche den Fuehrerschein,
-    but I only speak English").
+    STT_ENGINE picks between Flux (fastest turn-taking, 7 languages) and
+    nova-3 (all 12 languages, turn-taking by the local Smart Turn model). Both
+    handle switching language inside one call.
     """
+    use_keyterms = os.getenv("STT_KEYTERMS", "1") != "0"
+    keyterms = stt_keyterms() if use_keyterms else None
+
+    if STT_ENGINE == "flux":
+        from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
+
+        return DeepgramFluxSTTService(
+            api_key=os.getenv("DEEPGRAM_API_KEY", ""),
+            settings=DeepgramFluxSTTService.Settings(
+                model=os.getenv("DEEPGRAM_FLUX_MODEL", "flux-general-multi"),
+                language_hints=[Language(code) for code in FLUX_LANGUAGE_HINTS] or None,
+                keyterm=keyterms or [],
+            ),
+            enable_eager_end_of_turn=FLUX_EAGER,
+        )
+
+    if STT_ENGINE != "nova":
+        raise ValueError(f"STT_ENGINE={STT_ENGINE!r} is not an engine. Use flux or nova.")
+
     from pipecat.services.deepgram.stt import DeepgramSTTService
 
-    use_keyterms = os.getenv("STT_KEYTERMS", "1") != "0"
     return DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY", ""),
         settings=DeepgramSTTService.Settings(
@@ -119,8 +163,39 @@ def build_stt():
             punctuate=True,
             # Keyterm prompting is a nova-3 feature; set STT_KEYTERMS=0 if you
             # switch to a model that rejects it.
-            keyterm=stt_keyterms() if use_keyterms else None,
+            keyterm=keyterms,
         ),
+    )
+
+
+def build_user_params(session: CallSession) -> LLMUserAggregatorParams:
+    """How the caller's turns are detected, for the engine in use."""
+    if STT_ENGINE == "flux":
+        # Flux decides when a turn starts and ends, and Pipecat applies the
+        # turn strategies Flux recommends when none are given here. Adding a
+        # local detector would trigger a second reply for the same turn.
+        return LLMUserAggregatorParams(user_idle_timeout=USER_IDLE_SECONDS)
+
+    return LLMUserAggregatorParams(
+        vad_analyzer=SileroVADAnalyzer(),
+        user_turn_strategies=UserTurnStrategies(
+            # Two words to interrupt, so "mhm" does not cut the bot off --
+            # dropping to one while the caller dictates, so no digit of a
+            # number is thrown away.
+            start=[DictationAwareMinWords(session=session, min_words=INTERRUPT_MIN_WORDS)],
+            stop=[
+                # "Yes", "danke", "bye": over the moment they are said.
+                ShortReplyUserTurnStopStrategy(session=session),
+                # Everything else: Smart Turn decides, waiting at most
+                # TURN_STOP_SECS when it is unsure.
+                TurnAnalyzerUserTurnStopStrategy(
+                    turn_analyzer=LocalSmartTurnAnalyzerV3(
+                        params=SmartTurnParams(stop_secs=TURN_STOP_SECS)
+                    )
+                ),
+            ],
+        ),
+        user_idle_timeout=USER_IDLE_SECONDS,
     )
 
 
@@ -275,33 +350,17 @@ async def _end_call_after(seconds: int, runner: WorkerRunner, session: CallSessi
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, session: CallSession):
     """Wire the pipeline and run one call to completion."""
     session.idle_seconds = USER_IDLE_SECONDS
-    language = session.language.current
+    if STT_ENGINE == "flux":
+        language.set_available(language.FLUX_LANGUAGES)
+    current = session.language.current
     stt = build_stt()
-    llm = build_llm(prompts.system_prompt(language))
-    tts = build_tts(language)
+    llm = build_llm(prompts.system_prompt(current))
+    tts = build_tts(current)
 
     context = LLMContext(tools=TOOLS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(),
-            user_turn_strategies=UserTurnStrategies(
-                # Two words to interrupt, so "mhm" does not cut the bot off --
-                # dropping to one while the caller dictates, so no digit of a
-                # number is thrown away.
-                start=[DictationAwareMinWords(session=session, min_words=INTERRUPT_MIN_WORDS)],
-                # Smart Turn decides when the caller is done; TURN_STOP_SECS
-                # caps how long it may wait when unsure.
-                stop=[
-                    TurnAnalyzerUserTurnStopStrategy(
-                        turn_analyzer=LocalSmartTurnAnalyzerV3(
-                            params=SmartTurnParams(stop_secs=TURN_STOP_SECS)
-                        )
-                    )
-                ],
-            ),
-            user_idle_timeout=USER_IDLE_SECONDS,
-        ),
+        user_params=build_user_params(session),
     )
 
     pipeline = Pipeline(
@@ -311,6 +370,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
             # Right after speech-to-text: decides the call's language and moves
             # the model and the voice before they handle what was just said.
             LanguageSwitcher(session.language),
+            # Remembers what the caller actually said, so a tool can refuse a
+            # number or address the model made up.
+            HeardRecorder(session),
             user_aggregator,
             llm,
             tts,
@@ -382,10 +444,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
             return
         if session.dictating:
             # Silence after a "mhm" means the caller has finished dictating
-            # and is waiting to hear it back. Not an idle caller.
+            # and is waiting to hear it back. Not an idle caller. Read it back
+            # straight away from code -- asking the model first cost a second.
             tool = "read_back_phone_number" if session.dictating == "phone" else "read_back_email"
+            back_to_normal = UserIdleTimeoutUpdateFrame(timeout=session.idle_seconds)
+            line = tools.finish_dictation(session)
+            if line:
+                await worker.queue_frames([back_to_normal, TTSSpeakFrame(line)])
+                return
             await worker.queue_frames(
                 [
+                    back_to_normal,
                     LLMMessagesAppendFrame(
                         messages=[
                             {
@@ -398,7 +467,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, sessio
                             }
                         ],
                         run_llm=True,
-                    )
+                    ),
                 ]
             )
             return

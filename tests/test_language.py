@@ -338,6 +338,62 @@ async def pipeline_checks() -> None:
     check("and the choice is pinned", session.language.pinned)
 
 
+async def flux_checks() -> None:
+    print("\n7. With Flux, only the languages Flux can hear")
+    lang.set_available(lang.FLUX_LANGUAGES)
+    try:
+        check("Turkish is not switched to", lang.LanguagePolicy().observe(said("tr", 8)) is None)
+        check("Spanish still is", lang.LanguagePolicy().observe(said("es", 8)) == "es")
+        check("a request for Turkish is refused", lang.resolve("Türkisch") is None)
+        check("English is still fine", lang.resolve("English") == "en")
+        prompt = prompts.system_prompt("de")
+        language_section = prompt.split("# Sprache", 1)[1].split("\n# ", 1)[0]
+        check("Mia does not offer Turkish", "Türkisch" not in language_section)
+        check("but does offer Spanish", "Spanisch" in language_section)
+    finally:
+        lang.set_available(lang.SUPPORTED)
+    check("all twelve again afterwards", len(lang.available()) == len(lang.SUPPORTED))
+
+    print("\n8. Flux's early transcript switches the language once, not twice")
+    from pipecat.frames.frames import EagerTranscriptionFrame
+
+    policy = lang.LanguagePolicy()
+    recorder = Recorder()
+    worker = PipelineWorker(
+        Pipeline([lang.LanguageSwitcher(policy), recorder]), params=PipelineParams()
+    )
+    runner = WorkerRunner(handle_sigint=False)
+    await runner.add_workers(worker)
+    task = asyncio.create_task(runner.run())
+    try:
+        await asyncio.sleep(0.3)
+        words = "Hello I would like to book a lesson"
+        await worker.queue_frames(
+            [
+                EagerTranscriptionFrame(
+                    text=words, user_id="c", timestamp="", language=Language.EN
+                ),
+                TranscriptionFrame(
+                    text=words + ".", user_id="c", timestamp="", language=Language.EN
+                ),
+            ]
+        )
+        await asyncio.sleep(0.5)
+    finally:
+        await runner.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(task, timeout=5)
+    switches = recorder.tts_languages()
+    check("switched exactly once", switches == ["en"], str(switches))
+    order = [type(f).__name__ for f in recorder.frames]
+    check(
+        "the switch comes before the early transcript, so the early reply is in English",
+        "TTSUpdateSettingsFrame" in order
+        and "EagerTranscriptionFrame" in order
+        and order.index("TTSUpdateSettingsFrame") < order.index("EagerTranscriptionFrame"),
+    )
+
+
 async def main() -> int:
     store.init()
     # Pipecat loads a sentence tokenizer the first time a pipeline starts, and
@@ -353,6 +409,7 @@ async def main() -> int:
     coverage_checks()
     prompt_checks()
     await pipeline_checks()
+    await flux_checks()
 
     print(f"\n{'=' * 58}\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

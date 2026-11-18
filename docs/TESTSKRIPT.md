@@ -145,5 +145,7 @@ Anruf ohne Kontaktdaten wäre sonst spurlos verloren gewesen.
 | Antwortet sehr langsam | Kostenloses Gemini-Kontingent gedrosselt. Auf `LLM_PROVIDER=openai` wechseln. |
 | Englisch klingt deutsch | Sprachwechsel kommt nicht an der Stimme an → `uv run python tests/test_language.py` |
 | Redet in Ihre Pausen hinein | `TURN_STOP_SECS` erhöhen (Standard 2.0). Beim Diktieren sollte sie nur „Mhm" sagen — tut sie mehr, bitte mit Transkript melden. |
-| Antwortet zu langsam | `TURN_STOP_SECS` senken, und `LLM_MODEL=gpt-4.1-mini` prüfen (keine „denkenden" Modelle). |
+| Antwortet zu langsam | `STT_ENGINE=flux` prüfen (schnellste Variante). Bei `nova`: `TURN_STOP_SECS` senken. Und `LLM_MODEL=gpt-4.1-mini` (keine „denkenden" Modelle). |
+| Mia hört gar nichts (mit Flux) | Ihr Deepgram-Zugang erlaubt Flux evtl. nicht: `STT_ENGINE=nova` setzen. |
+| Türkisch/Arabisch/Polnisch wird nicht verstanden | Flux hört diese Sprachen nicht: `STT_ENGINE=nova` setzen. |
 | Wechselt nach einem einzelnen Wort die Sprache | Bitte melden, mit Transkript aus `/office`. Schwellen: `STRONG_WORDS` in `language.py`. |
